@@ -1,0 +1,4 @@
+tpm_pubkey_raw.bin
+client/target/
+host/target/
+client/clientApp

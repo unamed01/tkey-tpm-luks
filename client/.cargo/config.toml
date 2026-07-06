@@ -1,0 +1,25 @@
+[build]
+target = "riscv32i-unknown-none-elf"
+
+[profile.release]
+codegen-units = 1
+debug = false
+debug-assertions = false
+opt-level = "z"
+overflow-checks = true
+strip = true
+lto = true
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+
+[target.riscv32i-unknown-none-elf]
+rustflags = [
+  "-Ctarget-feature=+c,+zmmul",
+  "-Ccode-model=medium",
+  "-Cpanic=abort",
+  "-Crelocation-model=pic",
+  "-Clink-arg=-Tapp.lds",
+  "-Clink-arg=--gc-sections",
+]

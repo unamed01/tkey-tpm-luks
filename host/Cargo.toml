@@ -1,0 +1,11 @@
+[package]
+name = "host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tss-esapi = { version = "7.7", default-features = false }
+serialport = { version = "4.9.0", default-features = false }
+tkeyclient = "0.1.0"
+rpassword = "7.5.4"
+zeroize = "1.8.2"
