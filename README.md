@@ -4,13 +4,7 @@ luks2 + Tillitis Tkey, Full Disk Encryption and measured boot solution for Linux
 
 ## Why
 
-Standard TPM-sealed LUKS unlock (PCR policy only) protects against offline disk theft but not against a persistent evil-maid attack that can extract or replay a TPM-only secret, since the TPM alone has no way to prove *freshness* or bind the unlock to a physical token which the owner carries. `tkey-tpm-luks2` adds a hardware root of trust — a [TKey](https://tillitis.se/) — as a second factor that must physically be given a signed nonce (from TRNG) from the TPM before the disk can unlock, and mixes a user passphrase with CDI (Compound Device Identifier) into the final keyfile so possession of the TKey alone and neither is passphrase possession alone sufficient must have passphrase AND Tkey for disk decryption.
-
-## Threat model
-
-- **In scope:** evil-maid attacks against a machine left unattended (firmware/bootloader tampering, PCR replay, disk exfiltration).
-- **Assumption:** the TPM's PCR measurements are trustworthy up to the point the initramfs runs.
-- **Out of scope:** attacks against the TKey's own supply chain and physical coercion.
+Standard TPM-sealed LUKS unlock (PCR policy only) protects against offline disk theft but not against a persistent evil-maid attack that can extract or replay a TPM-only secret, since the TPM alone has no way to prove *freshness* or bind the unlock to a physical token which the owner carries. `tkey-tpm-luks2` adds a hardware root of trust a [TKey](https://tillitis.se/) as a second factor that must physically be given a signed nonce (from TRNG) from the TPM before the disk can unlock, and mixes a user passphrase with CDI (Compound Device Identifier) into the final keyfile so possession of the TKey alone and neither is passphrase possession alone sufficient must have passphrase AND Tkey for disk decryption.
 
 ## Architecture
 
@@ -61,19 +55,19 @@ re-enrollment is necessary on every update which changes anything that's measure
 
 **please open a github issue if any of this doesn't work!**
 
-theres very easy to use setup scripts that will set everything for you
+Theres very easy to use setup scripts that will set everything for you
 
 ```bash
 sudo ./setup_part1.sh
 ```
 
-if everything went right reboot then run
+If everything went right reboot then run
 
 ```bash
 sudo ./setup_part2.sh
 ```
 
-after everything is enrolled just reboot type passphrase in and everything should just work, and in a case it does not it will fall trough to your normal unlock sequence.
+After everything is enrolled just reboot type passphrase in and everything should just work, and in a case it does not it will fall trough to your normal unlock sequence.
 
 ## QubesOS usage (tested for Qubes 4.3.1)
 
@@ -102,7 +96,7 @@ qvm-run -p builder cat /home/user/tkey-tpm-luks2/enroll.sh > enroll.sh # going t
 qvm-run -p builder cat /home/user/tkey-tpm-luks2/host/target/release/verify > verify # going to be used later, note the path to it
 sudo chown root:root host module-setup.sh tkey-tpm-luks2.service
 sudo chmod +x host #make sure host is executable
-sudo mkdir -p /lib/dracut/modules.d/90tkey/ && mv -t /lib/dracut/modules.d/90tkey/ host module-setup.sh tkey-tpm-luks2.service 
+sudo mkdir -p /lib/dracut/modules.d/90tkey/ && mv -t /lib/dracut/modules.d/90tkey/ host module-setup.sh tkey-tpm-luks2.service #mkes dracut module
 sudo dracut --force --verbose #rebuild initramfs
 ```
 
@@ -119,6 +113,30 @@ now edit /etc/default/grub and at the end of GRUB_CMDLINE_LINUX="..." add note r
 GRUB_CMDLINE_LINUX="... rd.qubes.hide_all_usb rd.qubes.dom0_usb=04:00.4" # change with whatever identifier you got from lspci 
 ```
 
+also by default qubes' grub2 doesn't include tpm_verifier.mod so PCRs 8 and 9 will stay all 0s which make them useless, run this to fix it. note this is current default grub2 + tpm_verifier, if you've added other mods to it add them below as well. PCRs 8 and 9 should measure correctly on next boot.
+
+```bash
+# Backup first
+sudo cp /boot/efi/EFI/qubes/grubx64.efi /boot/efi/EFI/qubes/grubx64.efi.bak
+
+#modules from https://github.com/QubesOS/qubes-grub2/blob/00e34f13235d39f81fa0130500db43aa803c8a60/grub2.spec.in#L441 which are default.
+sudo grub2-mkimage \
+  -O x86_64-efi \
+  -o /boot/efi/EFI/qubes/grubx64.efi \
+  -p /EFI/qubes \
+  -d /usr/lib/grub/x86_64-efi \
+  all_video boot btrfs cat configfile cryptodisk echo efifwsetup efinet ext2 f2fs \
+  fat font gcry_rijndael gcry_rsa gcry_serpent gcry_sha256 gcry_twofish gcry_whirlpool \
+  gfxmenu gfxterm gzio halt hfsplus http increment iso9660 jpeg \
+  loadenv loopback linux lvm lsefi lsefimmap luks luks2 mdraid09 mdraid1x minicmd net \
+  multiboot multiboot2 normal part_apple part_msdos part_gpt \
+  password_pbkdf2 pgp png reboot regexp search search_fs_uuid search_fs_file \
+  search_label serial sleep syslinuxcfg test tftp video xfs zstd \
+  backtrace chain usb usbserial_common usbserial_pl2303 usbserial_ftdi usbserial_usbdebug \
+  keylayouts at_keyboard \
+  tpm_verifier #new
+```
+
 Rebuild grub with new config then reboot
 
 ```bash
@@ -129,7 +147,7 @@ systemctl reboot #reboot is necessary to make sure enrolled PCRs are correct.
 After reboot now you must enroll current PCR values this is also from **dom0**
 
 ```bash
-sudo ./enroll.sh #follow prompts and make sure all current PCRs are non zero
+sudo ./enroll.sh #follow prompts and make sure all current PCRs are non zero.
 qvm-copy-to-vm builder tpm_pubkey_raw.bin
 ```
 
@@ -138,7 +156,7 @@ Now make your RPC service for the binary verifier binary put this in /etc/qubes-
 ```bash
 #!/bin/bash
 
-exec /home/user/verify #change if the path to verify bin imported from earlier
+exec /home/user/verify #change if the path to verify bin imported from earlier is different.
 ```
 
 Then write this in /etc/qubes-rpc/policy/qubes.TPMProxy its recommended you use a dispvm for enrollment with no netvm change disp**** to match
@@ -147,7 +165,7 @@ Then write this in /etc/qubes-rpc/policy/qubes.TPMProxy its recommended you use 
 disp**** dom0 allow #change to match whatever dispvm**** you'll be enrolling it in.
 ```
 
-Then from builder compile client app from **builder**
+Then from builder compile client app from **builder** with pubkey we got from dom0
 
 ```bash
 mv QubesIncoming/dom0/tpm_pubkey_raw.bin tkey-tpm-luks2/ #or wherever you have this project's root at
