@@ -181,7 +181,7 @@ fn decrypt(tkey: &mut Box<dyn SerialPort>) -> Result<(), HostErr> {
     let status_code = match cryptsetup.wait()?.code() {
         Some(s) => s,
         None => {
-            tkey.write_all(&[HostMessage::DecryptionError as u8])?;
+            tkey.write_all(&[HostErr::DecryptionError as u8])?;
             return Err(HostErr::CryptsetupKilled);
         }
     };
@@ -191,7 +191,7 @@ fn decrypt(tkey: &mut Box<dyn SerialPort>) -> Result<(), HostErr> {
         Ok(())
     } else {
         eprintln!("cryptsetup exited with error code {}.", status_code);
-        tkey.write_all(&[HostMessage::DecryptionError as u8])?;
+        tkey.write_all(&[HostErr::DecryptionError as u8])?;
         Err(HostErr::CryptsetupErr)
     }
 }
