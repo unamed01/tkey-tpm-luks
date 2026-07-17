@@ -40,23 +40,37 @@ pub enum ClientMessage {
 }
 
 #[derive(Debug)]
+#[repr(u8)]
 pub enum HostErr {
     CryptsetupErr,
     CryptsetupKilled,
     PipeError,
     IOError,
     TpmError,
+    UnknownError,
     TpmRefusedToSign = 0x90,
+    DecryptionError = 0x98,
+    StringParseError,
 }
 #[repr(u8)]
 #[derive(Debug)]
 pub enum HostMessage {
     DecryptionSuccess = 0x99,
-    DecryptionError = 0x98,
     TpmSigned = 0x97,
-    TpmRefusedToSign = 0x90,
 }
 
+impl TryFrom<u8> for HostMessage {
+    type Error = HostErr;
+    fn try_from(value: u8) -> Result<Self, HostErr> {
+        match value {
+            0x99 => Ok(HostMessage::DecryptionSuccess),
+            0x97 => Ok(HostMessage::TpmSigned),
+            0x98 => Err(HostErr::DecryptionError),
+            0x90 => Err(HostErr::TpmRefusedToSign),
+            _ => Err(HostErr::UnknownError),
+        }
+    }
+}
 impl From<std::io::Error> for HostErr {
     fn from(_value: std::io::Error) -> Self {
         Self::IOError
@@ -73,6 +87,16 @@ impl Display for HostErr {
             HostErr::TpmRefusedToSign => {
                 write!(f, "tpm REFUSED to sign this system is untrustworthy")
             }
+            HostErr::UnknownError => write!(
+                f,
+                "unknown error found this is a bug please open a github issue to report it."
+            ),
+            HostErr::DecryptionError => write!(f, "couldn't decrypt passphrase is wrong."),
+            //only happens in verify.rs
+            HostErr::StringParseError => write!(
+                f,
+                "couldn't parse string correctly qrexec stream was corrupted?"
+            ),
         }
     }
 }
