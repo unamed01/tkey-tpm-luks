@@ -5,12 +5,12 @@ edition = "2024"
 
 [dependencies]
 rustkey = "0.5"
-p256 = { version = "0.13", default-features = false, features = [
+p256 = { version = "0.14", default-features = false, features = [
   "ecdsa",
   "pkcs8",
 ] }
 [build-dependencies]
-p256 = { version = "0.13", default-features = false, features = [
+p256 = { version = "0.14", default-features = false, features = [
   "ecdsa",
   "pkcs8",
 ] }
