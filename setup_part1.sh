@@ -8,6 +8,7 @@ if [[ "$EUID" != "0" ]]; then
 fi
 export systemdsvc=$(systemctl list-units | grep systemd-cryptsetup@luks | grep -v /run/credentials | awk '{print $1}')
 cd host/
+touch client/clientApp
 sudo -u $SUDO_USER cargo build --release
 mv target/release/host ../dracut/host
 cd ..
