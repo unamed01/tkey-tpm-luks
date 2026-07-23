@@ -16,6 +16,6 @@ install() {
   inst_libdir_file "libtss2*.so*"
   inst_libdir_file "libcrypto.so*"
   inst_libdir_file "libz.so*"
-  inst_simple "$moddir/tkey-fde.service" /usr/lib/systemd/system/tkey-fde.service
-  systemctl --root="$initdir" enable tkey-fde.service
+  inst_simple "$moddir/tkey-tpm-luks.service" /usr/lib/systemd/system/tkey-tpm-luks.service
+  systemctl --root="$initdir" enable tkey-tpm-luks.service
 }
