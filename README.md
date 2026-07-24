@@ -58,164 +58,42 @@ re-enrollment is necessary on every update which changes anything that's measure
 Theres very easy to use setup scripts that will set everything for you
 
 ```bash
-sudo ./setup_part1.sh
+sudo bash setup_part1.sh
 ```
 
 If everything went right reboot then run
 
 ```bash
-sudo ./setup_part2.sh
+sudo bash setup_part2.sh
 ```
 
 After everything is enrolled just reboot type passphrase in and everything should just work, and in a case it does not it will fall trough to your normal unlock sequence.
 
 ## QubesOS usage (tested for Qubes 4.3.1)
 
-(setup scripts coming to Qubes in a later update)
-
-builder is the placeholder name of whatever qube which you'll be actually compiling the source code under change as needed
-
 #### **make sure you make a backup before proceeding.**
 
 **please open a github issue if any of this doesn't work!**
 
-Firstly must compile host binary inside **builder**
-
+Firstly make a fully new builder qube clone this repo and audit the code inside it.
 ```bash
-cd host && cargo build --release
-mv target/release/host dracut/host
+sudo apt install rustup
+rustup default stable 
+rustup target add riscv32i-unknown-none-elf
+git clone https://github.com/unamed01/tkey-tpm-luks.git
 ```
 
-Then from **dom0** run these commands to copy all needed files onto dom0 note that tkey-tpm-luks2.service will fail and let it
-
+After you've looked at the code from dom0 take the qubes setup script and move into dom0
 ```bash
-qvm-run -p builder cat /home/user/tkey-tpm-luks2/dracut/module-setup.sh > module-setup.sh
-qvm-run -p builder cat /home/user/tkey-tpm-luks2/dracut/host > host 
-qvm-run -p builder cat /home/user/tkey-tpm-luks2/dracut/tkey-tpm-luks2.service > tkey-tpm-luks2.service
-qvm-run -p builder cat /home/user/tkey-tpm-luks2/enroll.sh > enroll.sh # going to be used later
-qvm-run -p builder cat /home/user/tkey-tpm-luks2/host/target/release/verify > verify # going to be used later, note the path to it
-sudo chown root:root host module-setup.sh tkey-tpm-luks2.service
-sudo chmod +x host #make sure host is executable
-sudo mkdir -p /lib/dracut/modules.d/90tkey/ && mv -t /lib/dracut/modules.d/90tkey/ host module-setup.sh tkey-tpm-luks2.service #mkes dracut module
-sudo dracut --force --verbose #rebuild initramfs
+qvm-run -p builder cat /home/user/tkey-tpm-luks/qubes_enrollpt1.sh > qubes_enrollpt1.sh
+sudo bash qubes_enrollpt1.sh #check the script before running it.
 ```
-
-Before we reboot still in **dom0** we must whitelist the USB controller that your USB controller is whitelisted so initramfs can talk to tkey find the indetifier by running this command below note that if you use a USB keyboard this might already be setup for you but do double check regardless.
-
+now you just reboot to update PCR values and run part2 which part1 has already moved onto dom0 for you into /root/tkey-files
 ```bash
-lspci | grep -i usb
+sudo su #be root so you can actually see script
+cd /root/tkey-files
 ```
-
-I personally have "04:00.4 USB controller: Advanced Micro Devices, Inc. [AMD] USB 3.1 " so thats what i'll use.
-now edit /etc/default/grub and at the end of GRUB_CMDLINE_LINUX="..." add note rd.qubes.hide_all_usb should already be there. your pcie device indetifier should look something like this: 04:00.4
-
-```grub
-GRUB_CMDLINE_LINUX="... rd.qubes.hide_all_usb rd.qubes.dom0_usb=04:00.4" # change with whatever identifier you got from lspci 
-```
-
-also by default qubes' grub2 doesn't include tpm_verifier.mod so PCRs 8 and 9 will stay all 0s which make them useless, run this to fix it. note this is current default grub2 + tpm_verifier, if you've added other mods to it add them below as well. PCRs 8 and 9 should measure correctly on next boot.
-
+make sure to plug Tkey in then run it (will walk you trough everything)
 ```bash
-# Backup first
-sudo cp /boot/efi/EFI/qubes/grubx64.efi /boot/efi/EFI/qubes/grubx64.efi.bak
-
-#modules from https://github.com/QubesOS/qubes-grub2/blob/00e34f13235d39f81fa0130500db43aa803c8a60/grub2.spec.in#L441 which are default.
-sudo grub2-mkimage \
-  -O x86_64-efi \
-  -o /boot/efi/EFI/qubes/grubx64.efi \
-  -p /EFI/qubes \
-  -d /usr/lib/grub/x86_64-efi \
-  all_video boot btrfs cat configfile cryptodisk echo efifwsetup efinet ext2 f2fs \
-  fat font gcry_rijndael gcry_rsa gcry_serpent gcry_sha256 gcry_twofish gcry_whirlpool \
-  gfxmenu gfxterm gzio halt hfsplus http increment iso9660 jpeg \
-  loadenv loopback linux lvm lsefi lsefimmap luks luks2 mdraid09 mdraid1x minicmd net \
-  multiboot multiboot2 normal part_apple part_msdos part_gpt \
-  password_pbkdf2 pgp png reboot regexp search search_fs_uuid search_fs_file \
-  search_label serial sleep syslinuxcfg test tftp video xfs zstd \
-  backtrace chain usb usbserial_common usbserial_pl2303 usbserial_ftdi usbserial_usbdebug \
-  keylayouts at_keyboard \
-  tpm_verifier #new
+sudo bash qubes_enrollpt2.sh
 ```
-
-Rebuild grub with new config then reboot
-
-```bash
-grub2-mkconfig -o /boot/grub2/grub.cfg
-systemctl reboot #reboot is necessary to make sure enrolled PCRs are correct.
-```
-
-After reboot now you must enroll current PCR values this is also from **dom0**
-
-```bash
-sudo ./enroll.sh #follow prompts and make sure all current PCRs are non zero.
-qvm-copy-to-vm builder tpm_pubkey_raw.bin
-```
-
-Now make your RPC service for the binary verifier binary put this in /etc/qubes-rpc/qubes.TPMProxy
-
-```bash
-#!/bin/bash
-
-exec /home/user/verify #change if the path to verify bin imported from earlier is different.
-```
-
-Then write this in /etc/qubes-rpc/policy/qubes.TPMProxy its recommended you use a dispvm for enrollment with no netvm change disp**** to match
-
-```policy
-disp**** dom0 allow #change to match whatever dispvm**** you'll be enrolling it in.
-```
-
-Then from builder compile client app from **builder** with pubkey we got from dom0
-
-```bash
-mv QubesIncoming/dom0/tpm_pubkey_raw.bin tkey-tpm-luks2/ #or wherever you have this project's root at
-cd tkey-tpm-luks2/client 
-cargo build --release
-llvm-objcopy --input-target=elf32-littleriscv --output-target=binary target/riscv32i-unknown-none-elf/release/client clientApp #gets in the right format for tkey
-cd ../host
-cargo build --release #MUST recompile to make sure ClientApp is there
-```
-
-Get clientApp in the right place now from dom0 take it from builder and place onto /boot
-
-```bash
-qvm-run -p builder cat /home/user/tkey-tpm-luks2/client/clientApp > client
-sudo cp client /boot/client
-```
-
-Now it is recommended you use a airgapped dispVM for passphrase enrollment and this is what will be demonstrated this part is still from **builder**
-start your dispVM then from builder run this and copy files to your new dispVM
-
-```bash
-qvm-copy target/release/qubes_enroll
-```
-
-Now plug in your tkey and attach it to your dispVM this can be done easily by the usb widget on the taskbar, then just run the binary
-
-```bash
-sudo QubesIncoming/builder/qubes_enroll #change if your builder vm is not named builder
-```
-
-Now from dom0 do this to take keyfile from disp and enroll
-
-```bash
-qvm-run -p disp**** cat /tmp/keyfile > /tmp/keyfile #takes keyfile from disp
-sha256sum /tmp/keyfile # make sure they match whats on disp
-```
-
-After you made sure keyfile matches make SURE to shred keyfile on disp.
-
-```bash
-sha256sum /tmp/keyfile # make sure they match
-sudo shred -uxz /tmp/keyfile
-```
-
-Now you can shutoff disp we'll be moving onto **dom0**
-
-```bash
-sudo cryptsetup luksAddKey  --new-key-slot 1 -y --keyfile-size 32 /dev/nvme0n1p3 /tmp/keyfile #change disk as needed and type in your current passphrase
-sudo cryptsetup open --test-passphrase --key-file /tmp/keyfile --keyfile-size 32 /dev/nvme0n1p3 #also change disk as needed.
-shred -uxz /tmp/keyfile #MAKE SURE you do this 
-```
-
-Now reboot and everything should just work!

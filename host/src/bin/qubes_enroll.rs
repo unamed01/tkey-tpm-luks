@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 use tkeyclient::TKey;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut tkey = TKey::connect(None)?;
     //makes it easier rather than having to copy multiple files pretty nice QOL but its not perfect
@@ -86,29 +86,26 @@ fn pass_enroll(tkey: &mut dyn SerialPort) -> Result<(), Box<dyn std::error::Erro
     println!(
         "enrolling passphrase now,you'll need to type this in exactly everytime to unlock your disk. (wont be echoed)"
     );
-    let mut pass1 = rpassword::prompt_password(">")?;
+    let pass1: Zeroizing<String> = rpassword::prompt_password(">")?.into();
     println!("type in again for confirmation.");
-    let mut pass2 = rpassword::prompt_password(">")?;
+    let pass2: Zeroizing<String> = rpassword::prompt_password(">")?.into();
     if pass1 != pass2 {
-        pass1.zeroize();
-        pass2.zeroize();
         println!("passwords DID NOT match, try again.");
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
         pass_enroll(tkey)?;
         return Ok(());
     };
-    pass2.zeroize();
     let mut pass_len = pass1.trim_end().len();
     if pass_len > u8::MAX as usize || pass_len < 8 {
+        pass_len.zeroize();
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
         Err(ClientError::PassLen)?;
     }
     tkey.write_all(&[pass_len as u8])?;
-    tkey.write_all(pass1.trim_end().as_bytes())?;
-    pass1.zeroize();
     pass_len.zeroize();
+    tkey.write_all(pass1.trim_end().as_bytes())?;
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
             println!("keyfile received sending onto cryptsetup for decryption");

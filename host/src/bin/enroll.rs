@@ -1,3 +1,10 @@
+//enrollment works by doing exactly what we'd do at runtime with less eror handling we want to make
+//sure we give host a somewhat known good state
+use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, verify};
+use serialport::SerialPort;
+use std::fs;
+use std::io::Write;
+use std::process::ExitCode;
 use std::{
     io::Read,
     process::{Command, Stdio},

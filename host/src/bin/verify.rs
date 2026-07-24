@@ -6,7 +6,7 @@ use std::{
     io,
     io::{Read, Write, stdin, stdout},
 };
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 //this is the code that actually gets run in dom0.
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
@@ -32,22 +32,19 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
 fn enroll() -> Result<(), HostErr> {
     //this below makes sure that we can realiably write the correct passphrase onto cryptsetup for
     //decryption using stdin only.
-    let mut current_pass_bytes = [0u8; 256];
-    let mut current_pass_bytes_len = [0u8; 1];
-    stdin().read_exact(&mut current_pass_bytes)?;
+    let mut current_pass_bytes: Zeroizing<[u8; 256]> = [0u8; 256].into();
+    let mut current_pass_bytes_len: Zeroizing<[u8; 1]> = [0u8; 1].into();
+    stdin().read_exact(&mut *current_pass_bytes_len)?;
     stdin().read_exact(&mut current_pass_bytes[..current_pass_bytes_len[0] as usize])?;
 
-    let mut current_pass: String = match String::from_utf8(
+    let current_pass: Zeroizing<String> = match String::from_utf8(
         current_pass_bytes[..current_pass_bytes_len[0] as usize].to_vec(),
     ) {
         Ok(k) => k,
-        Err(_) => {
-            current_pass_bytes.zeroize();
-            current_pass_bytes_len.zeroize();
-            return Err(HostErr::StringParseError)?;
-        }
-    };
-    let mut current_pass_len = current_pass.len().to_string();
+        Err(_) => Err(HostErr::StringParseError)?,
+    }
+    .into();
+    let current_pass_len: Zeroizing<String> = current_pass.len().to_string().into();
 
     let args = &[
         "luksAddKey",
@@ -66,23 +63,16 @@ fn enroll() -> Result<(), HostErr> {
     let mut stdin = match cryptsetup.stdin.take() {
         Some(stdin) => stdin,
         None => {
-            current_pass_len.zeroize();
-            current_pass.zeroize();
             return Err(HostErr::PipeError);
         }
     };
     //writes current passphrase
     stdin.write_all(current_pass.as_bytes())?;
-    current_pass.zeroize();
-    current_pass_len.zeroize();
-    current_pass_bytes.zeroize();
-    current_pass_bytes_len.zeroize();
     //takes keyfile from tkey from vm then sends over to cryptsetup
     {
-        let mut keyfile = [0u8; 32];
-        io::stdin().read_exact(&mut keyfile)?;
-        stdin.write_all(&keyfile)?;
-        keyfile.zeroize();
+        let mut keyfile: Zeroizing<[u8; 32]> = [0u8; 32].into();
+        io::stdin().read_exact(&mut *keyfile)?;
+        stdin.write_all(&*keyfile)?;
     }
     //extract status code (.code() should only fail if process is killed which is unlikely)
     let status_code = match cryptsetup.wait()?.code() {
