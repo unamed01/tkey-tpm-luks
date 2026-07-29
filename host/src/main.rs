@@ -5,6 +5,8 @@
 // couldnt verify software running on host) this is vital to allow user to update kernel,xen or grub
 // which is extremely important
 use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, load_app, verify};
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use serialport::SerialPort;
 use std::fs;
 use std::io::Write;
@@ -16,7 +18,7 @@ use std::{
     io::Read,
     process::{Command, Stdio},
 };
-// use tkeyclient::TKey;
+use x25519_dalek::{EphemeralSecret, PublicKey};
 use zeroize::Zeroize;
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
@@ -31,32 +33,35 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         return Ok(ExitCode::FAILURE);
     }
     let bin = fs::read("/mnt/boot/client")?;
-    // let mut tkey = TKey::connect(None)?;
-    // tkey.load_app(bin.as_slice(), None)?;
-    // drop(tkey);
     let mut tkey = serialport::new("/dev/ttyACM0", 62500)
         .timeout(Duration::from_secs(30))
         .open()?;
     load_app(&mut tkey, bin.as_slice())?;
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
-    //if tpm hasn't signed
-    let verify_thread = thread::spawn(move || -> Option<[u8; 64]> {
-        match verify(&nonce) {
-            Ok(sig) => Some(sig),
-            Err(_) => None,
-        }
+    //both TPM and Tkey are pretty slow so this saves a bit of time (kinda important here for UX)
+    let verify_thread = thread::spawn(move || -> Result<[u8; 64], String> {
+        verify(&nonce).map_err(|e| e.to_string())
     });
-    let mut trustworthy =
-        if let Some(sig) = verify_thread.join().map_err(|e| format!("err {e:?}"))? {
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed)?;
+    let mut rng = <StdRng as SeedableRng>::from_seed(seed);
+    let host_secret = EphemeralSecret::random_from_rng(&mut rng);
+    let host_public = PublicKey::from(&host_secret);
+    tkey.write_all(host_public.as_bytes())?;
+    let mut trustworthy = match verify_thread.join().map_err(|e| format!("err {e:?}"))? {
+        Ok(sig) => {
             tkey.write_all(&[HostMessage::TpmSigned as u8])?;
             tkey.write_all(&sig)?;
             true
-        } else {
+        }
+        Err(e) => {
+            eprintln!("ERR: {e}");
             eprintln!("tpm REFUSED, to sign nonce");
             tkey.write_all(&[HostErr::TpmRefusedToSign as u8])?;
             false
-        };
+        }
+    };
     match check_status(&mut tkey) {
         Ok(ClientMessage::GoodSig) => println!(
             "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"

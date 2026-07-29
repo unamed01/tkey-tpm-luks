@@ -1,3 +1,4 @@
+use blake2::{Blake2s256, Digest as BlakeDigest};
 //main lib which provides all relevant types needed for functioning plus verify() func its split
 //into one into some in client and some in host to make sure client doesnt need to pull #[derive(Debug)]
 //which increase binary size by a lot.
@@ -219,8 +220,9 @@ pub fn verify(nonce: &[u8; 32]) -> Result<[u8; 64], Box<dyn Error>> {
     sig_bytes[64 - s.len()..].copy_from_slice(s);
     Ok(sig_bytes)
 }
-//load_app function
+//pretty bad load_app function
 pub fn load_app(tkey: &mut Box<dyn SerialPort>, bin: &[u8]) -> Result<(), Box<dyn Error>> {
+    let mut hasher = Blake2s256::new();
     let bin_len: u32 = bin.len() as u32;
     let tag: u8 = 0;
     let domain: u8 = 2;
@@ -229,19 +231,40 @@ pub fn load_app(tkey: &mut Box<dyn SerialPort>, bin: &[u8]) -> Result<(), Box<dy
     tkey.write_all(&[header])?;
     tkey.write_all(&[0x03])?;
     tkey.write_all(&bin_len.to_le_bytes())?;
+    //empty USS since we don't trust system to send it USS yet
     tkey.write_all(&[0u8])?;
     tkey.write_all(&[0u8; 32])?;
+    //padding
     tkey.write_all(&[0u8; 90])?;
-    for bytes in bin.chunks(127) {
+    let mut resp = [0u8; 5];
+    tkey.read_exact(&mut resp)?;
+    if resp[2] != 0 {
+        Err("tkey rejected load_app request..")?
+    }
+    let total = bin_len.div_ceil(127) as usize;
+    for (i, bytes) in bin.chunks(127).enumerate() {
         let mut frame = [0u8; 129];
         frame[0] = header;
         frame[1] = 0x05;
-        frame[..bytes.len()].copy_from_slice(bytes);
+        frame[2..2 + bytes.len()].copy_from_slice(bytes);
         tkey.write_all(&frame)?;
-        let mut rsp = [0u8; 5];
-        tkey.read_exact(&mut rsp)?;
-        if rsp[2] != 0 {
-            return Err("TKey rejected a chunk (STATUS_BAD)".into());
+        if i == total - 1 {
+            let mut rsp = [0u8; 129];
+            tkey.read_exact(&mut rsp)?;
+            hasher.update(&frame[2..2 + bytes.len()]);
+            let hash = hasher.clone().finalize();
+            if rsp[3..35] == hash[..32] {
+                return Ok(());
+            } else {
+                Err("binary digests do not match, restart app")?;
+            }
+        } else {
+            hasher.update(&frame[2..2 + bytes.len()]);
+            let mut rsp = [0u8; 5];
+            tkey.read_exact(&mut rsp)?;
+            if rsp[2] != 0 {
+                return Err("TKey rejected a chunk (STATUS_BAD)".into());
+            }
         }
     }
     Ok(())

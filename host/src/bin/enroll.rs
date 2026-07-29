@@ -1,6 +1,6 @@
 //enrollment works by doing exactly what we'd do at runtime with less eror handling we want to make
 //sure we give host a somewhat known good state
-use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, verify};
+use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, load_app, verify};
 use serialport::SerialPort;
 use std::fs;
 use std::io::Write;
@@ -10,21 +10,18 @@ use std::{
     process::{Command, Stdio},
     time::Duration,
 };
-use tkeyclient::TKey;
 use zeroize::{Zeroize, Zeroizing};
 //this goes trough the exact same process as it would in initramfs but instead piping into
 //cryptsetup to enroll a keyslot
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let mut tkey = TKey::connect(None)?;
-    let bin = fs::read("../../../client/clientApp")?;
-    if bin.len() < 1000 {
-        panic!("did you recompile before trying to enroll?")
-    }
-    tkey.load_app(bin.as_slice(), None)?;
-    drop(tkey);
     let mut tkey = serialport::new("/dev/ttyACM0", 62500)
         .timeout(Duration::from_secs(30))
         .open()?;
+    let bin = fs::read("../../client/clientApp")?;
+    if bin.len() < 1000 {
+        panic!("ERR: bad tkey binary,did you recompile before trying to enroll?")
+    }
+    load_app(&mut tkey, bin.as_slice())?;
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
     let sig_bytes = verify(&nonce)?;

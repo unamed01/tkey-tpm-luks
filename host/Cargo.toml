@@ -6,8 +6,9 @@ edition = "2024"
 [dependencies]
 tss-esapi = { version = "7.7", default-features = false }
 serialport = { version = "4.9.0", default-features = false }
-tkeyclient = "0.1.0"
+blake2 = "0.10.6"
 rpassword = "7.5.4"
 zeroize = "1.8.2"
-rand = "0.10.2"
 x25519-dalek = "3.0.0"
+rand = { version = "0.10.2", default-features = false, features = ["std_rng"] }
+getrandom = "0.4.3"

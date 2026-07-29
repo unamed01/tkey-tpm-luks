@@ -1,16 +1,17 @@
 #![no_std]
 #![no_main]
 
+use chacha20::rand_core::SeedableRng;
 // this takes generates nonce sends nonce over the wire then takes in signature note this should is
 // intentionally outside of measured PCR values this is fine since cdi =
 // blake2s(uds + blake2s(app_bytes)) so if this app ever changes even correct passphrase cant unlock
 // disk.
+use chacha20::ChaCha20Rng;
 use core::arch::global_asm;
 use core::ptr;
 use core::sync::atomic::{self, Ordering};
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use p256::pkcs8::DecodePublicKey;
-use rand::SeedableRng;
 use rustkey::io::{read_into, write_u8};
 use rustkey::led::{LED_GREEN, LED_OFF, LED_PURPLE, LED_YELLOW, set};
 use rustkey::timer::sleep;
@@ -106,25 +107,38 @@ extern "C" fn main() -> ! {
     random(&mut nonce, b"");
     write_u8_slice(&nonce);
     let mut seed = [0u8; 32];
-    random(&mut seed, b"");
-    let mut rng = <rand::rngs::StdRng as SeedableRng>::from_seed(seed);
+    let mut cdi = read_cdi();
+    if blake2s(&mut seed, &cdi, b"nI2jlrOM9nlCnWXY/BpR0qe1Al4IltMz%").is_err() {
+        zeroize(&mut cdi);
+        write_u8(ClientError::Blake2 as u8);
+        rustkey::abort()
+    }
+    let mut rng = ChaCha20Rng::from_seed(seed);
     let tkey_secret = EphemeralSecret::random_from_rng(&mut rng);
     let tkey_public = PublicKey::from(&tkey_secret);
     write_u8_slice(tkey_public.as_bytes());
+    let host_public_bytes: &[u8; 32] = include_bytes!("../../host_pubkey");
+    let host_public = PublicKey::from(*host_public_bytes);
+    #[allow(unused)]
+    let ss = tkey_secret.diffie_hellman(&host_public);
     match verify_sig(nonce) {
         Ok(_) => set(LED_GREEN),
         //this is shouldn't happen unless user renerolled to new PCR values before updating client app
         //should be way more caitious when you see purple vs yellow host might be trying to give a bad signature or replay an old one
         Err(ClientError::InvalidSig) => {
             write_u8(ClientError::InvalidSig as u8);
-            assert!(request(30, LED_PURPLE));
+            if !request(30, LED_PURPLE) {
+                panic!()
+            }
         }
         // allows updates which change relevant PCR values and decryption on another clean system after tampering was detected
         // while trying its best to prevent social engineering attacks against a untrustworthy system
         // yellow LED is choosen to make it easily distinguishable from a panic which flashes red
         Err(e) => {
             write_u8(e as u8);
-            assert!(request(30, LED_YELLOW));
+            if !request(30, LED_YELLOW) {
+                panic!()
+            }
         }
     }
     let mut attempts = 0;

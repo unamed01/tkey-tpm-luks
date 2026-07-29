@@ -3,7 +3,7 @@
 //check qubes_guide.md for setup help you should still audit the code before doing so though
 //uses qrexec to talk to dom0 which owns tpm this will talk to verify bin enrollment should be done
 //inside an airgapped dispVM.
-use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status};
+use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, load_app};
 use serialport::SerialPort;
 use std::io::Write;
 use std::process::ExitCode;
@@ -12,20 +12,17 @@ use std::{
     process::{Command, Stdio},
     time::Duration,
 };
-use tkeyclient::TKey;
 use zeroize::{Zeroize, Zeroizing};
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let mut tkey = TKey::connect(None)?;
+    let mut tkey = serialport::new("/dev/ttyACM0", 62500)
+        .timeout(Duration::from_secs(30))
+        .open()?;
     //makes it easier rather than having to copy multiple files pretty nice QOL but its not perfect
     let bin = include_bytes!("../../../client/clientApp");
     if bin.len() < 1000 {
         panic!("did you recompile before passing onto dispVM?")
     }
-    tkey.load_app(bin, None)?;
-    drop(tkey);
-    let mut tkey = serialport::new("/dev/ttyACM0", 62500)
-        .timeout(Duration::from_secs(30))
-        .open()?;
+    load_app(&mut tkey, bin)?;
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
     let mut qrexec = Command::new("/usr/bin/qrexec-client-vm")

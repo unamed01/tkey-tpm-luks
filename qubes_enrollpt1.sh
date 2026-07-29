@@ -77,7 +77,7 @@ grub2-mkconfig -o /boot/grub2/grub.cfg
 cat >/etc/qubes-rpc/qubes.TPMProxy <<EOF
 #!/bin/bash
 
-exec -c "$PWD/verify"
+sudo exec -c "$PWD/verify"
 EOF
 
 echo "everything went well! you must now reboot so that new PCR values are enrolled correctly, then run qubes_enrollpt2.sh."
