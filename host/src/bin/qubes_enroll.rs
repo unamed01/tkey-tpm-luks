@@ -52,7 +52,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         _ => Err(ClientError::OutOfsync)?,
     }
     // this makes sure tpm signature is fine (will wait until it is if its not)
-    match check_status(&mut *tkey) {
+    match check_status(&mut tkey) {
         Ok(ClientMessage::GoodSig) => println!(
             "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
         ),
@@ -62,7 +62,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Err(e) => Err(e)?,
     }
-    pass_enroll(&mut *tkey)?;
+    pass_enroll(&mut tkey)?;
     let mut keyfile = [0u8; 32];
     tkey.read_exact(&mut keyfile)?;
     let current_passphrase = rpassword::prompt_password("input current luks Password.")?;
@@ -77,7 +77,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Ok(ExitCode::FAILURE)
     }
 }
-fn pass_enroll(tkey: &mut dyn SerialPort) -> Result<(), Box<dyn std::error::Error>> {
+fn pass_enroll(tkey: &mut Box<dyn SerialPort>) -> Result<(), Box<dyn std::error::Error>> {
     match check_status(tkey) {
         Ok(ClientMessage::Ready4pass) => {}
         Err(e) => Err(e)?,

@@ -10,11 +10,13 @@ use core::ptr;
 use core::sync::atomic::{self, Ordering};
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use p256::pkcs8::DecodePublicKey;
+use rand::SeedableRng;
 use rustkey::io::{read_into, write_u8};
 use rustkey::led::{LED_GREEN, LED_OFF, LED_PURPLE, LED_YELLOW, set};
 use rustkey::timer::sleep;
 use rustkey::touch::request;
 use rustkey::{blake2s, done, random, read_cdi};
+use x25519_dalek::{EphemeralSecret, PublicKey};
 
 // Entry point: zero all registers, init stack, zero BSS, call main.
 // Taken directly from the rusTkey README.
@@ -100,24 +102,29 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[unsafe(no_mangle)]
 extern "C" fn main() -> ! {
-    match verify_sig() {
+    let mut nonce = [0u8; 32];
+    random(&mut nonce, b"");
+    write_u8_slice(&nonce);
+    let mut seed = [0u8; 32];
+    random(&mut seed, b"");
+    let mut rng = <rand::rngs::StdRng as SeedableRng>::from_seed(seed);
+    let tkey_secret = EphemeralSecret::random_from_rng(&mut rng);
+    let tkey_public = PublicKey::from(&tkey_secret);
+    write_u8_slice(tkey_public.as_bytes());
+    match verify_sig(nonce) {
         Ok(_) => set(LED_GREEN),
         //this is shouldn't happen unless user renerolled to new PCR values before updating client app
         //should be way more caitious when you see purple vs yellow host might be trying to give a bad signature or replay an old one
         Err(ClientError::InvalidSig) => {
             write_u8(ClientError::InvalidSig as u8);
-            if !request(30, LED_PURPLE) {
-                panic!()
-            }
+            assert!(request(30, LED_PURPLE));
         }
         // allows updates which change relevant PCR values and decryption on another clean system after tampering was detected
         // while trying its best to prevent social engineering attacks against a untrustworthy system
         // yellow LED is choosen to make it easily distinguishable from a panic which flashes red
         Err(e) => {
             write_u8(e as u8);
-            if !request(30, LED_YELLOW) {
-                panic!()
-            }
+            assert!(request(30, LED_YELLOW));
         }
     }
     let mut attempts = 0;
@@ -142,16 +149,13 @@ extern "C" fn main() -> ! {
         read_into(&mut passphrase[..pass_len as usize]);
         let mut keyfile = [0u8; 32];
         let mut cdi = read_cdi();
-        match blake2s(&mut keyfile, &cdi, &passphrase[..pass_len as usize]) {
-            Ok(_) => {}
-            Err(_) => {
-                zeroize(&mut cdi);
-                zeroize(&mut passphrase);
-                zeroize(&mut keyfile);
-                write_u8(ClientError::Blake2 as u8);
-                sleep(3);
-                continue;
-            }
+        if blake2s(&mut keyfile, &cdi, &passphrase[..pass_len as usize]).is_err() {
+            zeroize(&mut cdi);
+            zeroize(&mut passphrase);
+            zeroize(&mut keyfile);
+            write_u8(ClientError::Blake2 as u8);
+            sleep(3);
+            continue;
         }
         zeroize(&mut passphrase);
         write_u8(ClientMessage::GoodPass as u8);
@@ -171,13 +175,10 @@ extern "C" fn main() -> ! {
     done()
 }
 
-fn verify_sig() -> Result<(), ClientError> {
+fn verify_sig(nonce: [u8; 32]) -> Result<(), ClientError> {
     //shouldnt fail since we've checked pubkey at compile time
     let tpm_pubkey = VerifyingKey::from_public_key_der(include_bytes!("../../tpm_pubkey_raw.bin"))
         .map_err(|_| ClientError::BadPubkey)?;
-    let mut nonce = [0u8; 32];
-    random(&mut nonce, b"");
-    write_u8_slice(&nonce);
     let mut status = [0u8; 1];
     read_into(&mut status);
     if status[0] == HostMessage::TpmSigned as u8 {

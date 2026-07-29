@@ -9,6 +9,8 @@ p256 = { version = "0.14", default-features = false, features = [
   "ecdsa",
   "pkcs8",
 ] }
+x25519-dalek = "3.0.0"
+rand = { version = "0.10.2", default-features = false, features = ["std_rng"] }
 [build-dependencies]
 p256 = { version = "0.14", default-features = false, features = [
   "ecdsa",

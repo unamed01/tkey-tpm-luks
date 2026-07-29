@@ -6,7 +6,7 @@ use std::{
     io,
     io::{Read, Write, stdin, stdout},
 };
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 //this is the code that actually gets run in dom0.
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {

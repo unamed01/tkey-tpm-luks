@@ -4,18 +4,19 @@
 // another warning is shown at systemd-ask-password (even though we can guarantee it since we
 // couldnt verify software running on host) this is vital to allow user to update kernel,xen or grub
 // which is extremely important
-use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, verify};
+use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, load_app, verify};
 use serialport::SerialPort;
 use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
+use std::thread;
 use std::time::Duration;
 use std::{
     error::Error,
     io::Read,
     process::{Command, Stdio},
 };
-use tkeyclient::TKey;
+// use tkeyclient::TKey;
 use zeroize::Zeroize;
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
@@ -30,30 +31,33 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         return Ok(ExitCode::FAILURE);
     }
     let bin = fs::read("/mnt/boot/client")?;
-    let mut tkey = TKey::connect(None)?;
-    tkey.load_app(bin.as_slice(), None)?;
-    drop(tkey);
+    // let mut tkey = TKey::connect(None)?;
+    // tkey.load_app(bin.as_slice(), None)?;
+    // drop(tkey);
     let mut tkey = serialport::new("/dev/ttyACM0", 62500)
         .timeout(Duration::from_secs(30))
         .open()?;
+    load_app(&mut tkey, bin.as_slice())?;
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
-
     //if tpm hasn't signed
-    let mut trustworthy: bool = match verify(&nonce) {
-        Ok(sig) => {
+    let verify_thread = thread::spawn(move || -> Option<[u8; 64]> {
+        match verify(&nonce) {
+            Ok(sig) => Some(sig),
+            Err(_) => None,
+        }
+    });
+    let mut trustworthy =
+        if let Some(sig) = verify_thread.join().map_err(|e| format!("err {e:?}"))? {
             tkey.write_all(&[HostMessage::TpmSigned as u8])?;
             tkey.write_all(&sig)?;
             true
-        }
-        Err(e) => {
-            eprintln!("{e}");
+        } else {
             eprintln!("tpm REFUSED, to sign nonce");
             tkey.write_all(&[HostErr::TpmRefusedToSign as u8])?;
             false
-        }
-    };
-    match check_status(&mut *tkey) {
+        };
+    match check_status(&mut tkey) {
         Ok(ClientMessage::GoodSig) => println!(
             "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
         ),
@@ -72,7 +76,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             return Ok(ExitCode::FAILURE);
         }
         tries += 1;
-        match check_status(&mut *tkey) {
+        match check_status(&mut tkey) {
             Ok(ClientMessage::Ready4pass) => {}
             Err(e) => return Err(e)?,
             _ => return Err(ClientError::OutOfsync)?,
@@ -126,7 +130,7 @@ fn ask_for_password(tkey: &mut Box<dyn SerialPort>, trustworthy: bool) -> Result
     if pass_len > u8::MAX as usize || pass_len < 8 {
         passphrase.zeroize();
         tkey.write_all(&[0u8])?;
-        _ = check_status(tkey.as_mut());
+        _ = check_status(tkey);
         return Err(ClientError::PassLen);
     }
     //writting password length to client
@@ -135,7 +139,7 @@ fn ask_for_password(tkey: &mut Box<dyn SerialPort>, trustworthy: bool) -> Result
     tkey.write_all(passphrase.trim_end().as_bytes())?;
     passphrase.zeroize();
     pass_len.zeroize();
-    match check_status(tkey.as_mut()) {
+    match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
             println!("keyfile received sending onto cryptsetup for decryption");
             Ok(())

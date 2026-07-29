@@ -31,21 +31,21 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     tkey.write_all(&sig_bytes)?;
 
     // this makes sure tpm signature is fine (will wait until it is if its not)
-    match check_status(&mut *tkey) {
+    match check_status(&mut tkey) {
         Ok(ClientMessage::GoodSig) => println!(
             "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
         ),
         Err(ClientError::InvalidSig) => println!("sig is invalid should only happen if updating."),
         _ => return Err("host and tkey are out of sync restart the app")?,
     }
-    pass_enroll(&mut *tkey)?;
+    pass_enroll(&mut tkey)?;
     match enroll(&mut tkey) {
         Ok(_) => Ok(ExitCode::SUCCESS),
         Err(HostErr::CryptsetupErr) => Ok(ExitCode::FAILURE),
         Err(e) => return Err(e)?,
     }
 }
-fn pass_enroll(tkey: &mut dyn SerialPort) -> Result<(), Box<dyn std::error::Error>> {
+fn pass_enroll(tkey: &mut Box<dyn SerialPort>) -> Result<(), Box<dyn std::error::Error>> {
     match check_status(tkey) {
         Ok(ClientMessage::Ready4pass) => {}
         Err(e) => Err(e)?,

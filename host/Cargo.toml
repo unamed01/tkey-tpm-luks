@@ -9,3 +9,5 @@ serialport = { version = "4.9.0", default-features = false }
 tkeyclient = "0.1.0"
 rpassword = "7.5.4"
 zeroize = "1.8.2"
+rand = "0.10.2"
+x25519-dalek = "3.0.0"

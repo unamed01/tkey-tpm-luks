@@ -5,6 +5,7 @@ use serialport::SerialPort;
 use std::error::Error;
 
 use std::fmt::Display;
+use std::io::Read;
 use std::str::FromStr;
 use tss_esapi::structures::MaxBuffer;
 use tss_esapi::{
@@ -27,10 +28,6 @@ pub const LUKSUUID: &str = env!("luksUUID");
 pub const BOOTDEVICE: &str = env!("bootdev");
 //whatever luks2 encrypted partition is usually /dev/nvme0n1p3 but do check what is in your system.
 pub const ENCRYPTEDDISK: &str = env!("luksdev");
-const _: () = assert!(
-    !LUKSUUID.is_empty() && !BOOTDEVICE.is_empty() && !ENCRYPTEDDISK.is_empty(),
-    "make sure to populate disk devices and LUKSUUID, in lib.rs"
-);
 #[repr(u8)]
 #[derive(Debug)]
 pub enum ClientMessage {
@@ -157,7 +154,7 @@ impl From<std::io::Error> for ClientError {
     }
 }
 // helper func takes in port and gives either CLientMessage or ClientError caller chooses how to proceed.
-pub fn check_status(port: &mut dyn SerialPort) -> Result<ClientMessage, ClientError> {
+pub fn check_status<T: Read>(port: &mut T) -> Result<ClientMessage, ClientError> {
     let mut status_byte = [0u8; 1];
     port.read_exact(&mut status_byte)?;
     ClientMessage::try_from(status_byte[0])
@@ -208,18 +205,44 @@ pub fn verify(nonce: &[u8; 32]) -> Result<[u8; 64], Box<dyn Error>> {
     let signature = ctx.sign(key_handle, digest, scheme, ticket)?;
 
     //make sure its the right format
-    let ecdsa = match signature {
-        tss_esapi::structures::Signature::EcDsa(s) => s,
-        _ => return Err("unexpected TPM signature type".into()),
+    let tss_esapi::structures::Signature::EcDsa(ecdsa) = signature else {
+        return Err("unexpected TPM signature type".into());
     };
     let mut sig_bytes = [0u8; 64];
     let r = ecdsa.signature_r().value();
     let s = ecdsa.signature_s().value();
     if r.len() > 32 || s.len() > 32 {
-        Err(HostErr::TpmError)?
+        Err(HostErr::TpmError)?;
     }
     // Left-pad into 32-byte slots (TPM might strip leading zeros)
     sig_bytes[32 - r.len()..32].copy_from_slice(r);
     sig_bytes[64 - s.len()..].copy_from_slice(s);
     Ok(sig_bytes)
+}
+//load_app function
+pub fn load_app(tkey: &mut Box<dyn SerialPort>, bin: &[u8]) -> Result<(), Box<dyn Error>> {
+    let bin_len: u32 = bin.len() as u32;
+    let tag: u8 = 0;
+    let domain: u8 = 2;
+    let len_code: u8 = 3;
+    let header = (tag << 5) | (domain << 3) | len_code;
+    tkey.write_all(&[header])?;
+    tkey.write_all(&[0x03])?;
+    tkey.write_all(&bin_len.to_le_bytes())?;
+    tkey.write_all(&[0u8])?;
+    tkey.write_all(&[0u8; 32])?;
+    tkey.write_all(&[0u8; 90])?;
+    for bytes in bin.chunks(127) {
+        let mut frame = [0u8; 129];
+        frame[0] = header;
+        frame[1] = 0x05;
+        frame[..bytes.len()].copy_from_slice(bytes);
+        tkey.write_all(&frame)?;
+        let mut rsp = [0u8; 5];
+        tkey.read_exact(&mut rsp)?;
+        if rsp[2] != 0 {
+            return Err("TKey rejected a chunk (STATUS_BAD)".into());
+        }
+    }
+    Ok(())
 }
