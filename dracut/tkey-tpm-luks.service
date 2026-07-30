@@ -1,5 +1,5 @@
 [Unit]
-Description=TKey FDE Unlock
+Description=TKey-tpm-luks Unlock
 DefaultDependencies=no
 Before=cryptsetup.target
 After=dev-ttyACM0.device

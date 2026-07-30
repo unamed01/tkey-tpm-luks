@@ -75,10 +75,10 @@ After everything is enrolled just reboot type passphrase in and everything shoul
 
 **please open a github issue if any of this doesn't work!**
 
-Firstly make a fully new builder qube clone this repo and audit the code inside it. (deps are for debian-13-minimal)
+Firstly make a fully new builder Qube clone this repo and audit the code inside it. And install deps (deps are for debian-13-minimal)
 ```bash
-sudo apt install llvm rustup tss2-dev gcc libudev-dev
-sudo apt install qubes-usb-proxy #if using debian-13-minimal
+sudo apt install llvm rustup libtss2-dev gcc libudev-dev
+sudo apt install qubes-usb-proxy #if using minimal
 rustup default stable 
 rustup target add riscv32i-unknown-none-elf
 git clone https://github.com/unamed01/tkey-tpm-luks.git

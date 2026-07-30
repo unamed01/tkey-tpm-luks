@@ -36,7 +36,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut stdin = qrexec.stdin.take().expect("failed to take qrexec stdin");
     let mut stdout = qrexec.stdout.take().expect("failed to take qrexec stdout");
     stdin.write_all(&nonce)?;
-    let mut b = [0u8];
+    let mut b = [0u8; 1];
     stdout.read_exact(&mut b)?;
     match HostMessage::try_from(b[0]) {
         Ok(HostMessage::TpmSigned) => {

@@ -32,6 +32,7 @@ mkdir -p dracut/
 #these are for later
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/host/target/release/verify >verify
 chmod +x verify
+strip verify
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/enroll.sh >enroll.sh
 chmod +x enroll.sh
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/qubes_enrollpt2.sh >qubes_enrollpt2.sh
@@ -52,12 +53,12 @@ if ! grep 'rd.qubes.dom0_usb' /etc/default/grub; then
   sed -i '/rd\.qubes\.hide_all_usb/ s/"$/ rd\.qubes\.dom0_usb='"$usbController"'"/' /etc/default/grub
 fi
 # Backup first
-test -f /boot/efi/EFI/qubes/grubx64.efi.bak || cp /boot/efi/EFI/qubes/grubx64.efi /boot/efi/EFI/qubes/grubx64.efi.bak
+test -f /boot/efi/EFI/BOOT/BOOTX64.EFI.bak || cp /boot/efi/EFI/BOOT/BOOTX64.EFI /boot/efi/EFI/BOOT/BOOTX64.EFI.bak
 #modules from https://github.com/QubesOS/qubes-grub2/blob/00e34f13235d39f81fa0130500db43aa803c8a60/grub2.spec.in#L441 which are default.
 # this is needed since by default qubes' grub doesnt have the tpm module so this is needed to make sure PCRs 8,9 arent 0s.
 grub2-mkimage \
   -O x86_64-efi \
-  -o /boot/efi/EFI/qubes/grubx64.efi \
+  -o /boot/efi/EFI/BOOT/BOOTX64.EFI \
   -p /EFI/qubes \
   -d /usr/lib/grub/x86_64-efi \
   all_video boot btrfs cat configfile cryptodisk echo efifwsetup efinet ext2 f2fs \
@@ -75,9 +76,10 @@ dracut --force --verbose
 grub2-mkconfig -o /boot/grub2/grub.cfg
 #sets up qrexec svc for later. (just replaces itself  with verify bin which handles all of enrollment)
 cat >/etc/qubes-rpc/qubes.TPMProxy <<EOF
-#!/bin/bash
+#!/usr/bin/sudo bash
 
 exec -c "$PWD/verify"
 EOF
+chmod +x /etc/qubes-rpc/qubes.TPMProxy
 
 echo "everything went well! you must now reboot so that new PCR values are enrolled correctly, then run qubes_enrollpt2.sh."

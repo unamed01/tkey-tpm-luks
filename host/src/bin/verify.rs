@@ -16,12 +16,14 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Ok(s) => {
             stdout().write_all(&[HostMessage::TpmSigned as u8])?;
             stdout().write_all(&s)?;
+            stdout().flush()?;
         }
         Err(e) => {
             eprintln!("tpm refused to unseal");
             eprintln!("{}", e);
             eprintln!("moving on this is only meant to happen if you're updating.");
             stdout().write_all(&[HostErr::TpmRefusedToSign as u8])?;
+            stdout().flush()?;
         }
     };
     enroll()?;
