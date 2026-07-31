@@ -191,8 +191,9 @@ extern "C" fn main() -> ! {
 
 fn verify_sig(nonce: [u8; 32]) -> Result<(), ClientError> {
     //shouldnt fail since we've checked pubkey at compile time
-    let tpm_pubkey = VerifyingKey::from_public_key_der(include_bytes!("../../tpm_pubkey_raw.bin"))
-        .map_err(|_| ClientError::BadPubkey)?;
+    let key_bytes: &[u8; 91] = include_bytes!("../../tpm_pubkey_raw.bin");
+    let tpm_pubkey =
+        VerifyingKey::from_sec1_bytes(&key_bytes[26..91]).map_err(|_| ClientError::BadPubkey)?;
     let mut status = [0u8; 1];
     read_into(&mut status);
     if status[0] == HostMessage::TpmSigned as u8 {
