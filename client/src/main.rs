@@ -90,6 +90,7 @@ pub enum ClientError {
     InvalidSig = 0x13,
     BadPubkey = 0x14,
     IOError = 0x15,
+    TpmRefused = 0x13,
     UnknownError,
 }
 
@@ -113,11 +114,15 @@ extern "C" fn main() -> ! {
         // allows updates which change relevant PCR values and decryption on another clean system after tampering was detected
         // while trying its best to prevent social engineering attacks against a untrustworthy system
         // yellow LED is choosen to make it easily distinguishable from a panic which flashes red
-        Err(e) => {
-            write_u8(e as u8);
+        Err(ClientError::TpmRefused) => {
+            write_u8(ClientError::TpmRefused as u8);
             if !request(30, LED_YELLOW) {
                 panic!()
             }
+        }
+        Err(e) => {
+            write_u8(e as u8);
+            panic!()
         }
     }
     let mut attempts = 0;
@@ -190,7 +195,7 @@ fn verify_sig() -> Result<(), ClientError> {
         write_u8(ClientMessage::GoodSig as u8);
         Ok(())
     } else {
-        Err(ClientError::InvalidSig)
+        Err(ClientError::TpmRefused)
     }
 }
 
