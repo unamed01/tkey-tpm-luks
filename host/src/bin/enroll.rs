@@ -1,22 +1,20 @@
 //enrollment works by doing exactly what we'd do at runtime with less eror handling we want to make
 //sure we give host a somewhat known good state
-use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, load_app, verify};
-use serialport::SerialPort;
+use host::{
+    ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app, verify,
+};
 use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
 use std::{
     io::Read,
     process::{Command, Stdio},
-    time::Duration,
 };
 use zeroize::{Zeroize, Zeroizing};
 //this goes trough the exact same process as it would in initramfs but instead piping into
 //cryptsetup to enroll a keyslot
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let mut tkey = serialport::new("/dev/ttyACM0", 62500)
-        .timeout(Duration::from_secs(30))
-        .open()?;
+    let mut tkey = Tkey::new()?;
     let bin = fs::read("../../client/clientApp")?;
     if bin.len() < 1000 {
         panic!("ERR: bad tkey binary,did you recompile before trying to enroll?")
@@ -42,7 +40,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Err(e) => return Err(e)?,
     }
 }
-fn pass_enroll(tkey: &mut Box<dyn SerialPort>) -> Result<(), Box<dyn std::error::Error>> {
+fn pass_enroll(tkey: &mut Tkey) -> Result<(), Box<dyn std::error::Error>> {
     match check_status(tkey) {
         Ok(ClientMessage::Ready4pass) => {}
         Err(e) => Err(e)?,
@@ -80,7 +78,7 @@ fn pass_enroll(tkey: &mut Box<dyn SerialPort>) -> Result<(), Box<dyn std::error:
         _ => Err(ClientError::OutOfsync)?,
     }
 }
-fn enroll(tkey: &mut Box<dyn SerialPort>) -> Result<(), HostErr> {
+fn enroll(tkey: &mut Tkey) -> Result<(), HostErr> {
     println!("to enroll you must type in your currently enrolled passphrase (won't be echoed)");
     let current_pass = rpassword::prompt_password(">")?;
     let current_pass_len = current_pass.len().to_string();

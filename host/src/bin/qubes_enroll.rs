@@ -3,20 +3,16 @@
 //check qubes_guide.md for setup help you should still audit the code before doing so though
 //uses qrexec to talk to dom0 which owns tpm this will talk to verify bin enrollment should be done
 //inside an airgapped dispVM.
-use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, load_app};
-use serialport::SerialPort;
+use host::{ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app};
 use std::io::Write;
 use std::process::ExitCode;
 use std::{
     io::Read,
     process::{Command, Stdio},
-    time::Duration,
 };
 use zeroize::{Zeroize, Zeroizing};
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let mut tkey = serialport::new("/dev/ttyACM0", 62500)
-        .timeout(Duration::from_secs(30))
-        .open()?;
+    let mut tkey = Tkey::new()?;
     //makes it easier rather than having to copy multiple files pretty nice QOL but its not perfect
     let bin = include_bytes!("../../../client/clientApp");
     if bin.len() < 1000 {
@@ -74,7 +70,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Ok(ExitCode::FAILURE)
     }
 }
-fn pass_enroll(tkey: &mut Box<dyn SerialPort>) -> Result<(), Box<dyn std::error::Error>> {
+fn pass_enroll(tkey: &mut Tkey) -> Result<(), Box<dyn std::error::Error>> {
     match check_status(tkey) {
         Ok(ClientMessage::Ready4pass) => {}
         Err(e) => Err(e)?,

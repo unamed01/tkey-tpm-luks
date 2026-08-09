@@ -1,17 +1,17 @@
 #![no_std]
 #![no_main]
 
-use chacha20::rand_core::SeedableRng;
 // this takes generates nonce sends nonce over the wire then takes in signature note this should is
 // intentionally outside of measured PCR values this is fine since cdi =
 // blake2s(uds + blake2s(app_bytes)) so if this app ever changes even correct passphrase cant unlock
 // disk.
-use chacha20::ChaCha20Rng;
+use chacha20::cipher::StreamCipher;
+use chacha20::rand_core::SeedableRng;
+use chacha20::{ChaCha20, ChaCha20Rng, KeyIvInit};
 use core::arch::global_asm;
 use core::ptr;
 use core::sync::atomic::{self, Ordering};
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
-use p256::pkcs8::DecodePublicKey;
 use rustkey::io::{read_into, write_u8};
 use rustkey::led::{LED_GREEN, LED_OFF, LED_PURPLE, LED_YELLOW, set};
 use rustkey::timer::sleep;
@@ -74,7 +74,6 @@ pub enum HostMessage {
     DecryptionSuccess = 0x99,
     DecryptionError = 0x98,
     TpmSigned = 0x97,
-    //only error here
     TpmRefusedToSign = 0x90,
 }
 
@@ -93,11 +92,12 @@ pub enum ClientError {
     InvalidSig = 0x13,
     BadPubkey = 0x14,
     IOError = 0x15,
+    ChaChaInit = 0x16,
     UnknownError,
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(_: &core::panic::PanicInfo) -> ! {
     rustkey::abort()
 }
 
@@ -106,6 +106,9 @@ extern "C" fn main() -> ! {
     let mut nonce = [0u8; 32];
     random(&mut nonce, b"");
     write_u8_slice(&nonce);
+    let mut encryption_nonce = [0u8; 32];
+    random(&mut encryption_nonce, b"");
+    write_u8_slice(&encryption_nonce);
     let mut seed = [0u8; 32];
     let mut cdi = read_cdi();
     if blake2s(&mut seed, &cdi, b"nI2jlrOM9nlCnWXY/BpR0qe1Al4IltMz%").is_err() {
@@ -117,10 +120,13 @@ extern "C" fn main() -> ! {
     let tkey_secret = EphemeralSecret::random_from_rng(&mut rng);
     let tkey_public = PublicKey::from(&tkey_secret);
     write_u8_slice(tkey_public.as_bytes());
-    let host_public_bytes: &[u8; 32] = include_bytes!("../../host_pubkey");
-    let host_public = PublicKey::from(*host_public_bytes);
-    #[allow(unused)]
+    let mut host_public_bytes = [0u8; 32];
+    read_into(&mut host_public_bytes);
+    let host_public = PublicKey::from(host_public_bytes);
     let ss = tkey_secret.diffie_hellman(&host_public);
+    let mut cipher = ChaCha20::new_from_slices(ss.as_bytes(), &encryption_nonce)
+        .map_err(|_| write_u8(ClientError::ChaChaInit as u8))
+        .unwrap();
     match verify_sig(nonce) {
         Ok(_) => set(LED_GREEN),
         //this is shouldn't happen unless user renerolled to new PCR values before updating client app
@@ -172,9 +178,12 @@ extern "C" fn main() -> ! {
             continue;
         }
         zeroize(&mut passphrase);
-        write_u8(ClientMessage::GoodPass as u8);
-        write_u8_slice(&keyfile);
+        let mut encrypted_keyfile = [0u8; 32];
+        cipher.apply_keystream_b2b(&keyfile, &mut encrypted_keyfile);
         zeroize(&mut keyfile);
+        write_u8(ClientMessage::GoodPass as u8);
+        write_u8_slice(&encrypted_keyfile);
+        zeroize(&mut encrypted_keyfile);
         zeroize(&mut cdi);
         let mut success = [0u8; 1];
         read_into(&mut success);
@@ -193,7 +202,7 @@ fn verify_sig(nonce: [u8; 32]) -> Result<(), ClientError> {
     //shouldnt fail since we've checked pubkey at compile time
     let key_bytes: &[u8; 91] = include_bytes!("../../tpm_pubkey_raw.bin");
     let tpm_pubkey =
-        VerifyingKey::from_sec1_bytes(&key_bytes[26..91]).map_err(|_| ClientError::BadPubkey)?;
+        VerifyingKey::from_sec1_bytes(&key_bytes[27..91]).map_err(|_| ClientError::BadPubkey)?;
     let mut status = [0u8; 1];
     read_into(&mut status);
     if status[0] == HostMessage::TpmSigned as u8 {

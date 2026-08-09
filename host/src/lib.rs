@@ -1,13 +1,16 @@
-use blake2::{Blake2s256, Digest as BlakeDigest};
 //main lib which provides all relevant types needed for functioning plus verify() func its split
 //into one into some in client and some in host to make sure client doesnt need to pull #[derive(Debug)]
 //which increase binary size by a lot.
-use serialport::SerialPort;
+use blake2::{Blake2s256, Digest as BlakeDigest};
 use std::error::Error;
 
 use std::fmt::Display;
-use std::io::Read;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::ops::{Deref, DerefMut};
+use std::os::fd::AsRawFd;
 use std::str::FromStr;
+use termios::{Termios, cfmakeraw, tcsetattr};
 use tss_esapi::structures::MaxBuffer;
 use tss_esapi::{
     Context, TctiNameConf,
@@ -93,7 +96,7 @@ impl Display for HostErr {
             //only happens in verify.rs
             HostErr::StringParseError => write!(
                 f,
-                "couldn't parse string correctly qrexec stream was corrupted?"
+                "couldn't parse string correctly, qrexec stream was corrupted?"
             ),
         }
     }
@@ -107,7 +110,7 @@ pub enum ClientError {
     MalformedSig = 0x12,
     InvalidSig = 0x13,
     BadPubkey = 0x14,
-    IOError = 0x15,
+    IOError(io::Error) = 0x15,
     //these two have no equivalent u8 since tkey never transmits them its host side only.
     OutOfsync,
     UnknownError,
@@ -125,7 +128,10 @@ impl TryFrom<u8> for ClientMessage {
             0x12 => Err(ClientError::MalformedSig),
             0x13 => Err(ClientError::InvalidSig),
             0x14 => Err(ClientError::BadPubkey),
-            0x15 => Err(ClientError::IOError),
+            0x15 => Err(ClientError::IOError(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "tkey couldn't communicate",
+            ))),
             _ => Err(ClientError::UnknownError),
         }
     }
@@ -142,16 +148,62 @@ impl Display for ClientError {
                 f,
                 "public key couldnt be imported something must've went wrong on the build process."
             ),
-            Self::IOError => write!(f, "couldn't communicate with tkey"),
+            Self::IOError(e) => write!(f, "IO error: {}", e),
             Self::UnknownError => write!(f, "tkey sent invalid error message."),
             Self::OutOfsync => write!(f, "host and tkey are out of sync, restart app."),
         }
     }
 }
+pub struct Tkey {
+    tkey: File,
+}
+impl Tkey {
+    pub fn new() -> Result<Tkey, Box<dyn Error>> {
+        let tkey = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/ttyACM0")?;
+        let tkey_file = tkey.as_raw_fd();
+        let mut termios = Termios::from_fd(tkey_file)?;
+        cfmakeraw(&mut termios);
+        tcsetattr(tkey_file, termios::TCSANOW, &termios)?;
+        Ok(Tkey { tkey })
+    }
+}
+impl Read for Tkey {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.tkey.read(buf)
+    }
+    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
+        self.tkey.read_exact(buf)
+    }
+}
+impl Write for Tkey {
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.tkey.write_all(buf)
+    }
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tkey.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.tkey.flush()
+    }
+}
+impl Deref for Tkey {
+    type Target = File;
+    fn deref(&self) -> &Self::Target {
+        &self.tkey
+    }
+}
+impl DerefMut for Tkey {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tkey
+    }
+}
 //lets SerialPort ops work with ClientError
 impl From<std::io::Error> for ClientError {
-    fn from(_value: std::io::Error) -> Self {
-        Self::IOError
+    fn from(value: std::io::Error) -> Self {
+        Self::IOError(value)
     }
 }
 // helper func takes in port and gives either CLientMessage or ClientError caller chooses how to proceed.
@@ -161,6 +213,9 @@ pub fn check_status<T: Read>(port: &mut T) -> Result<ClientMessage, ClientError>
     ClientMessage::try_from(status_byte[0])
 }
 
+// takes in nonce interfaces with TPM asks to sign nonce and gets sig back.
+// # Errors
+// when PCRs don't match or fails to communicate with TPM properly
 pub fn verify(nonce: &[u8; 32]) -> Result<[u8; 64], Box<dyn Error>> {
     let mut ctx = Context::new(TctiNameConf::from_str("device:/dev/tpmrm0")?)?;
 
@@ -205,7 +260,6 @@ pub fn verify(nonce: &[u8; 32]) -> Result<[u8; 64], Box<dyn Error>> {
     };
     let signature = ctx.sign(key_handle, digest, scheme, ticket)?;
 
-    //make sure its the right format
     let tss_esapi::structures::Signature::EcDsa(ecdsa) = signature else {
         return Err("unexpected TPM signature type".into());
     };
@@ -220,8 +274,44 @@ pub fn verify(nonce: &[u8; 32]) -> Result<[u8; 64], Box<dyn Error>> {
     sig_bytes[64 - s.len()..].copy_from_slice(s);
     Ok(sig_bytes)
 }
-//pretty bad load_app function
-pub fn load_app(tkey: &mut Box<dyn SerialPort>, bin: &[u8]) -> Result<(), Box<dyn Error>> {
+pub fn get_key_seed() -> Result<[u8; 32], Box<dyn Error>> {
+    let mut context = Context::new(TctiNameConf::from_str("device:/dev/tpmrm0")?)?;
+
+    let session = context
+        .start_auth_session(
+            None,
+            None,
+            None,
+            SessionType::Policy,
+            SymmetricDefinition::Null,
+            HashingAlgorithm::Sha256,
+        )?
+        .ok_or("TPM returned no session")?;
+    let pcr_selection = PcrSelectionListBuilder::new()
+        .with_selection(
+            HashingAlgorithm::Sha256,
+            &[
+                PcrSlot::Slot0,
+                PcrSlot::Slot4,
+                PcrSlot::Slot8,
+                PcrSlot::Slot9,
+            ],
+        )
+        .build()?;
+    let policy_sess = PolicySession::try_from(session)?;
+    context.policy_pcr(policy_sess, Digest::default(), pcr_selection)?;
+    let tpm_handle = TpmHandle::try_from(0x8100_0002u32)?;
+    let key_handle = context.tr_from_tpm_public(tpm_handle)?;
+
+    let seed_bytes = [0u8; 32];
+    Ok(seed_bytes)
+}
+
+// loads client app onto tkey.
+//# Errors
+//when tkey is already on app mode
+//or binary gets corrupted on the way to tkeybinary gets corrupted on the way to tkey
+pub fn load_app(tkey: &mut Tkey, bin: &[u8]) -> Result<(), Box<dyn Error>> {
     let mut hasher = Blake2s256::new();
     let bin_len: u32 = bin.len() as u32;
     let tag: u8 = 0;
@@ -239,7 +329,7 @@ pub fn load_app(tkey: &mut Box<dyn SerialPort>, bin: &[u8]) -> Result<(), Box<dy
     let mut resp = [0u8; 5];
     tkey.read_exact(&mut resp)?;
     if resp[2] != 0 {
-        Err("tkey rejected load_app request..")?
+        Err("tkey rejected load_app request..")?;
     }
     let total = bin_len.div_ceil(127) as usize;
     for (i, bytes) in bin.chunks(127).enumerate() {
@@ -249,22 +339,21 @@ pub fn load_app(tkey: &mut Box<dyn SerialPort>, bin: &[u8]) -> Result<(), Box<dy
         frame[2..2 + bytes.len()].copy_from_slice(bytes);
         tkey.write_all(&frame)?;
         if i == total - 1 {
-            let mut rsp = [0u8; 129];
-            tkey.read_exact(&mut rsp)?;
+            let mut resp = [0u8; 129];
+            tkey.read_exact(&mut resp)?;
             hasher.update(&frame[2..2 + bytes.len()]);
-            let hash = hasher.clone().finalize();
-            if rsp[3..35] == hash[..32] {
+            let hash = hasher.finalize();
+            if resp[3..35] == hash[..32] {
                 return Ok(());
-            } else {
-                Err("binary digests do not match, restart app")?;
             }
-        } else {
-            hasher.update(&frame[2..2 + bytes.len()]);
-            let mut rsp = [0u8; 5];
-            tkey.read_exact(&mut rsp)?;
-            if rsp[2] != 0 {
-                return Err("TKey rejected a chunk (STATUS_BAD)".into());
-            }
+            Err("binary digests do not match, must restart app")?;
+            break;
+        }
+        hasher.update(&frame[2..2 + bytes.len()]);
+        let mut resp = [0u8; 5];
+        tkey.read_exact(&mut resp)?;
+        if resp[2] != 0 {
+            return Err("TKey rejected a chunk (STATUS_BAD)".into());
         }
     }
     Ok(())

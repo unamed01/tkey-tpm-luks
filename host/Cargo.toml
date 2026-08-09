@@ -5,10 +5,15 @@ edition = "2024"
 
 [dependencies]
 tss-esapi = { version = "7.7", default-features = false }
-serialport = { version = "4.9.0", default-features = false }
-blake2 = "0.10.6"
+blake2 = { version = "0.10.6", default-features = false }
 rpassword = "7.5.4"
-zeroize = "1.8.2"
-x25519-dalek = "3.0.0"
-rand = { version = "0.10.2", default-features = false, features = ["std_rng"] }
+zeroize = "1.9.0"
+chacha20 = { version = "0.10.1", default-features = false, features = [
+  "cipher",
+  "rng",
+] }
+x25519-dalek = { version = "3.0.0", default-features = false, features = [
+  "zeroize",
+] }
+termios = "0.3.3"
 getrandom = "0.4.3"

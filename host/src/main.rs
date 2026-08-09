@@ -4,15 +4,16 @@
 // another warning is shown at systemd-ask-password (even though we can guarantee it since we
 // couldnt verify software running on host) this is vital to allow user to update kernel,xen or grub
 // which is extremely important
-use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, load_app, verify};
-use rand::SeedableRng;
-use rand::rngs::StdRng;
-use serialport::SerialPort;
+use chacha20::cipher::stream::{StreamCipher, StreamCipherCoreWrapper};
+use chacha20::{ChaCha20, ChaCha20Rng, KeyIvInit, rand_core::SeedableRng};
+use chacha20::{ChaChaCore, R20, variants::Ietf};
+use host::{
+    ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app, verify,
+};
 use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
 use std::thread;
-use std::time::Duration;
 use std::{
     error::Error,
     io::Read,
@@ -29,13 +30,11 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         .status()?
         .success();
     if !mount {
-        println!("failed to mount");
-        return Ok(ExitCode::FAILURE);
+        Err("failed to mount")?;
     }
     let bin = fs::read("/mnt/boot/client")?;
-    let mut tkey = serialport::new("/dev/ttyACM0", 62500)
-        .timeout(Duration::from_secs(30))
-        .open()?;
+
+    let mut tkey = Tkey::new()?;
     load_app(&mut tkey, bin.as_slice())?;
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
@@ -43,12 +42,24 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     let verify_thread = thread::spawn(move || -> Result<[u8; 64], String> {
         verify(&nonce).map_err(|e| e.to_string())
     });
+
+    let mut encryption_nonce = [0u8; 32];
+    tkey.read_exact(&mut encryption_nonce)?;
+
+    //TODO: take seed from TPM sealed object
     let mut seed = [0u8; 32];
     getrandom::fill(&mut seed)?;
-    let mut rng = <StdRng as SeedableRng>::from_seed(seed);
+
+    let mut rng = ChaCha20Rng::from_seed(seed);
     let host_secret = EphemeralSecret::random_from_rng(&mut rng);
-    let host_public = PublicKey::from(&host_secret);
-    tkey.write_all(host_public.as_bytes())?;
+    let host_pub = PublicKey::from(&host_secret);
+    tkey.write_all(host_pub.as_bytes())?;
+    let mut tkey_pub_bytes = [0u8; 32];
+    tkey.read_exact(&mut tkey_pub_bytes)?;
+    let tkey_pub = PublicKey::from(tkey_pub_bytes);
+    let ss = host_secret.diffie_hellman(&tkey_pub);
+    let cipher = ChaCha20::new_from_slices(ss.as_bytes(), &encryption_nonce)?;
+    let mut cipher = Box::new(cipher);
     let mut trustworthy = match verify_thread.join().map_err(|e| format!("err {e:?}"))? {
         Ok(sig) => {
             tkey.write_all(&[HostMessage::TpmSigned as u8])?;
@@ -73,6 +84,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         }
         _ => return Err(ClientError::OutOfsync)?,
     }
+    //make sure it doesn't mut'd later
     let trustworthy = trustworthy;
     let mut tries = 0;
     loop {
@@ -81,12 +93,14 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             return Ok(ExitCode::FAILURE);
         }
         tries += 1;
+
         match check_status(&mut tkey) {
             Ok(ClientMessage::Ready4pass) => {}
             Err(e) => return Err(e)?,
             _ => return Err(ClientError::OutOfsync)?,
         }
-        if let Err(e) = ask_for_password(&mut tkey, trustworthy) {
+
+        if let Err(e) = ask_for_password(&mut tkey, trustworthy, &mut cipher) {
             if matches!(e, ClientError::PassLen) {
                 println!("password length error, try again.");
                 continue;
@@ -94,7 +108,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
                 Err(e)?
             }
         }
-        match decrypt(&mut tkey) {
+        match decrypt(&mut tkey, &mut cipher) {
             Ok(_) => return Ok(ExitCode::SUCCESS),
             Err(e @ (HostErr::CryptsetupKilled | HostErr::CryptsetupErr)) => {
                 let reason = if matches!(e, HostErr::CryptsetupErr) {
@@ -112,16 +126,22 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         };
     }
 }
-fn ask_for_password(tkey: &mut Box<dyn SerialPort>, trustworthy: bool) -> Result<(), ClientError> {
-    //we cant control this warning will actually appear since
+fn ask_for_password(
+    tkey: &mut Tkey,
+    trustworthy: bool,
+    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+) -> Result<(), ClientError> {
+    //can't control whether the warning will appear if system hasn't been verified but might as well
+    //try to warn user twice (tkey already gates proceeding with touch)
     let prompt = if trustworthy {
         "input passphrase ALWAYS be sure tkey led is green before doing so."
     } else {
-        "TPM REFUSED TO UNSEAL, system might be tampered with. Input password at your own risk."
+        "tpm REFUSED to unseal, system might be tampered with. Input password at your own risk."
     };
     let pass = Command::new("/usr/bin/systemd-ask-password")
         .arg(prompt)
         .output()?;
+
     let mut passphrase_bytes = pass.stdout;
     let mut passphrase = match String::try_from(passphrase_bytes.clone()) {
         Ok(k) => k,
@@ -142,6 +162,7 @@ fn ask_for_password(tkey: &mut Box<dyn SerialPort>, trustworthy: bool) -> Result
     tkey.write_all(&[pass_len as u8])?;
     //sending actual password to client
     tkey.write_all(passphrase.trim_end().as_bytes())?;
+
     passphrase.zeroize();
     pass_len.zeroize();
     match check_status(tkey) {
@@ -154,7 +175,10 @@ fn ask_for_password(tkey: &mut Box<dyn SerialPort>, trustworthy: bool) -> Result
     }
 }
 
-fn decrypt(tkey: &mut Box<dyn SerialPort>) -> Result<(), HostErr> {
+fn decrypt(
+    tkey: &mut Tkey,
+    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+) -> Result<(), HostErr> {
     let args = &[
         "open",
         "--key-file",
@@ -167,6 +191,7 @@ fn decrypt(tkey: &mut Box<dyn SerialPort>) -> Result<(), HostErr> {
     ];
     let mut keyfile = [0u8; 32];
     tkey.read_exact(&mut keyfile)?;
+    cipher.apply_keystream(&mut keyfile);
     let mut cryptsetup = Command::new("/usr/bin/cryptsetup")
         .args(args)
         .stdin(Stdio::piped())
@@ -186,6 +211,7 @@ fn decrypt(tkey: &mut Box<dyn SerialPort>) -> Result<(), HostErr> {
             }
         }
     }
+
     //extract status code (.code() should only fail if process is killed which is very unlikely)
     let status_code = match cryptsetup.wait()?.code() {
         Some(s) => s,
