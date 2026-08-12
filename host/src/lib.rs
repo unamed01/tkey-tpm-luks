@@ -4,6 +4,9 @@
 use blake2::{Blake2s256, Digest as BlakeDigest};
 use std::error::Error;
 
+use chacha20::cipher::stream::StreamCipherCoreWrapper;
+use chacha20::{ChaCha20, ChaCha20Rng, KeyIvInit, rand_core::SeedableRng};
+use chacha20::{ChaChaCore, R20, variants::Ietf};
 use std::fmt::Display;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -25,6 +28,7 @@ use tss_esapi::{
         Digest, HashScheme, PcrSelectionListBuilder, PcrSlot, SignatureScheme, SymmetricDefinition,
     },
 };
+use x25519_dalek::{EphemeralSecret, PublicKey};
 
 //make sure you populate these with correct values
 pub const LUKSUUID: &str = env!("luksUUID");
@@ -207,7 +211,7 @@ impl From<std::io::Error> for ClientError {
     }
 }
 // helper func takes in port and gives either CLientMessage or ClientError caller chooses how to proceed.
-pub fn check_status<T: Read>(port: &mut T) -> Result<ClientMessage, ClientError> {
+pub fn check_status(port: &mut Tkey) -> Result<ClientMessage, ClientError> {
     let mut status_byte = [0u8; 1];
     port.read_exact(&mut status_byte)?;
     ClientMessage::try_from(status_byte[0])
@@ -274,6 +278,7 @@ pub fn verify(nonce: &[u8; 32]) -> Result<[u8; 64], Box<dyn Error>> {
     sig_bytes[64 - s.len()..].copy_from_slice(s);
     Ok(sig_bytes)
 }
+
 pub fn get_key_seed() -> Result<[u8; 32], Box<dyn Error>> {
     let mut context = Context::new(TctiNameConf::from_str("device:/dev/tpmrm0")?)?;
 
@@ -301,7 +306,7 @@ pub fn get_key_seed() -> Result<[u8; 32], Box<dyn Error>> {
     let policy_sess = PolicySession::try_from(session)?;
     context.policy_pcr(policy_sess, Digest::default(), pcr_selection)?;
     let tpm_handle = TpmHandle::try_from(0x8100_0002u32)?;
-    let key_handle = context.tr_from_tpm_public(tpm_handle)?;
+    let _key_handle = context.tr_from_tpm_public(tpm_handle)?;
 
     let seed_bytes = [0u8; 32];
     Ok(seed_bytes)
@@ -357,4 +362,28 @@ pub fn load_app(tkey: &mut Tkey, bin: &[u8]) -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+// communicates with tkey to get SS trough assymetric crypto
+// # Errors
+// if we fail to communicate with tkey (e.g gets unplugged)
+pub fn get_chacha20_cipher(
+    tkey: &mut Tkey,
+) -> Result<StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>, Box<dyn Error>> {
+    let mut encryption_nonce = [0u8; 12];
+    tkey.read_exact(&mut encryption_nonce)?;
+
+    //TODO: take seed from TPM sealed object
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed)?;
+
+    let mut rng = ChaCha20Rng::from_seed(seed);
+    let host_secret = EphemeralSecret::random_from_rng(&mut rng);
+    let host_pub = PublicKey::from(&host_secret);
+    tkey.write_all(host_pub.as_bytes())?;
+    let mut tkey_pub_bytes = [0u8; 32];
+    tkey.read_exact(&mut tkey_pub_bytes)?;
+    let tkey_pub = PublicKey::from(tkey_pub_bytes);
+    let ss = host_secret.diffie_hellman(&tkey_pub);
+    let cipher = ChaCha20::new_from_slices(ss.as_bytes(), &encryption_nonce)?;
+    Ok(cipher)
 }

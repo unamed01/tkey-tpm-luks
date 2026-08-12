@@ -5,10 +5,10 @@
 // couldnt verify software running on host) this is vital to allow user to update kernel,xen or grub
 // which is extremely important
 use chacha20::cipher::stream::{StreamCipher, StreamCipherCoreWrapper};
-use chacha20::{ChaCha20, ChaCha20Rng, KeyIvInit, rand_core::SeedableRng};
 use chacha20::{ChaChaCore, R20, variants::Ietf};
 use host::{
-    ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app, verify,
+    ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, get_chacha20_cipher,
+    load_app, verify,
 };
 use std::fs;
 use std::io::Write;
@@ -19,7 +19,6 @@ use std::{
     io::Read,
     process::{Command, Stdio},
 };
-use x25519_dalek::{EphemeralSecret, PublicKey};
 use zeroize::Zeroize;
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
@@ -32,10 +31,12 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     if !mount {
         Err("failed to mount")?;
     }
-    let bin = fs::read("/mnt/boot/client")?;
-
     let mut tkey = Tkey::new()?;
-    load_app(&mut tkey, bin.as_slice())?;
+    {
+        let bin = fs::read("/mnt/boot/client")?;
+
+        load_app(&mut tkey, bin.as_slice())?;
+    }
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
     //both TPM and Tkey are pretty slow so this saves a bit of time (kinda important here for UX)
@@ -43,23 +44,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         verify(&nonce).map_err(|e| e.to_string())
     });
 
-    let mut encryption_nonce = [0u8; 32];
-    tkey.read_exact(&mut encryption_nonce)?;
+    let mut cipher = get_chacha20_cipher(&mut tkey)?;
 
-    //TODO: take seed from TPM sealed object
-    let mut seed = [0u8; 32];
-    getrandom::fill(&mut seed)?;
-
-    let mut rng = ChaCha20Rng::from_seed(seed);
-    let host_secret = EphemeralSecret::random_from_rng(&mut rng);
-    let host_pub = PublicKey::from(&host_secret);
-    tkey.write_all(host_pub.as_bytes())?;
-    let mut tkey_pub_bytes = [0u8; 32];
-    tkey.read_exact(&mut tkey_pub_bytes)?;
-    let tkey_pub = PublicKey::from(tkey_pub_bytes);
-    let ss = host_secret.diffie_hellman(&tkey_pub);
-    let cipher = ChaCha20::new_from_slices(ss.as_bytes(), &encryption_nonce)?;
-    let mut cipher = Box::new(cipher);
     let mut trustworthy = match verify_thread.join().map_err(|e| format!("err {e:?}"))? {
         Ok(sig) => {
             tkey.write_all(&[HostMessage::TpmSigned as u8])?;
@@ -94,15 +80,22 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         }
         tries += 1;
 
-        match check_status(&mut tkey) {
-            Ok(ClientMessage::Ready4pass) => {}
-            Err(e) => return Err(e)?,
-            _ => return Err(ClientError::OutOfsync)?,
+        let status = check_status(&mut tkey);
+        //first thing clientapp should do is signal its ready 4 passphrase if it does not print the error and exit
+        if !matches!(status, Ok(ClientMessage::Ready4pass)) {
+            println!("expected Ready4pass signal received:");
+            let _ = dbg!(&status);
+            Err(ClientError::OutOfsync)?
         }
 
         if let Err(e) = ask_for_password(&mut tkey, trustworthy, &mut cipher) {
-            if matches!(e, ClientError::PassLen) {
-                println!("password length error, try again.");
+            if matches!(e, ClientError::PassLen | ClientError::Blake2) {
+                let reason = if matches!(e, ClientError::PassLen) {
+                    "password length error"
+                } else {
+                    "blake2 error"
+                };
+                println!("{reason}, try again. {}/3 tries", tries);
                 continue;
             } else {
                 Err(e)?
@@ -161,7 +154,9 @@ fn ask_for_password(
     //writting password length to client
     tkey.write_all(&[pass_len as u8])?;
     //sending actual password to client
-    tkey.write_all(passphrase.trim_end().as_bytes())?;
+    let mut passphrase_encrypted = vec![0u8; pass_len];
+    cipher.apply_keystream_b2b(passphrase.trim_end().as_bytes(), &mut passphrase_encrypted);
+    tkey.write_all(&passphrase_encrypted)?;
 
     passphrase.zeroize();
     pass_len.zeroize();
@@ -207,6 +202,7 @@ fn decrypt(
             Ok(()) => keyfile.zeroize(),
             Err(e) => {
                 keyfile.zeroize();
+                tkey.write_all(&[HostErr::DecryptionError as u8])?;
                 Err(e)?
             }
         }

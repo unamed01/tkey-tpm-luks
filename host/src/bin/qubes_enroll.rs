@@ -3,6 +3,8 @@
 //check qubes_guide.md for setup help you should still audit the code before doing so though
 //uses qrexec to talk to dom0 which owns tpm this will talk to verify bin enrollment should be done
 //inside an airgapped dispVM.
+use chacha20::cipher::stream::{StreamCipher, StreamCipherCoreWrapper};
+use chacha20::{ChaChaCore, R20, variants::Ietf};
 use host::{ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app};
 use std::io::Write;
 use std::process::ExitCode;
@@ -29,6 +31,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut stdin = qrexec.stdin.take().expect("failed to take qrexec stdin");
     let mut stdout = qrexec.stdout.take().expect("failed to take qrexec stdout");
     stdin.write_all(&nonce)?;
+    let mut cipher = host::get_chacha20_cipher(&mut tkey)?;
     let mut b = [0u8];
     stdout.read_exact(&mut b)?;
     match HostMessage::try_from(b[0]) {
@@ -55,9 +58,11 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Err(e) => Err(e)?,
     }
-    pass_enroll(&mut tkey)?;
+    pass_enroll(&mut tkey, &mut cipher)?;
+    let mut encrypted_keyfile = [0u8; 32];
+    tkey.read_exact(&mut encrypted_keyfile)?;
     let mut keyfile = [0u8; 32];
-    tkey.read_exact(&mut keyfile)?;
+    cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
     let current_passphrase = rpassword::prompt_password("input current luks Password.")?;
     stdin.write_all(&[current_passphrase.len() as u8])?;
     stdin.write_all(current_passphrase.as_bytes())?;
@@ -70,7 +75,10 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Ok(ExitCode::FAILURE)
     }
 }
-fn pass_enroll(tkey: &mut Tkey) -> Result<(), Box<dyn std::error::Error>> {
+fn pass_enroll(
+    tkey: &mut Tkey,
+    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     match check_status(tkey) {
         Ok(ClientMessage::Ready4pass) => {}
         Err(e) => Err(e)?,
@@ -86,7 +94,7 @@ fn pass_enroll(tkey: &mut Tkey) -> Result<(), Box<dyn std::error::Error>> {
         println!("passwords DID NOT match, try again.");
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
-        pass_enroll(tkey)?;
+        pass_enroll(tkey, cipher)?;
         return Ok(());
     };
     let mut pass_len = pass1.trim_end().len();
@@ -94,11 +102,14 @@ fn pass_enroll(tkey: &mut Tkey) -> Result<(), Box<dyn std::error::Error>> {
         pass_len.zeroize();
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
-        Err(ClientError::PassLen)?;
+        pass_enroll(tkey, cipher)?;
+        return Ok(());
     }
     tkey.write_all(&[pass_len as u8])?;
+    let mut encrypted_passphrase = vec![0u8; pass_len];
+    cipher.apply_keystream_b2b(pass1.trim_end().as_bytes(), &mut encrypted_passphrase);
     pass_len.zeroize();
-    tkey.write_all(pass1.trim_end().as_bytes())?;
+    tkey.write_all(&encrypted_passphrase)?;
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
             println!("keyfile received sending onto cryptsetup for decryption");

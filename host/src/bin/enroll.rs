@@ -1,7 +1,10 @@
 //enrollment works by doing exactly what we'd do at runtime with less eror handling we want to make
 //sure we give host a somewhat known good state
+use chacha20::cipher::stream::{StreamCipher, StreamCipherCoreWrapper};
+use chacha20::{ChaChaCore, R20, variants::Ietf};
 use host::{
-    ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app, verify,
+    ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, get_chacha20_cipher,
+    load_app, verify,
 };
 use std::fs;
 use std::io::Write;
@@ -23,6 +26,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
     let sig_bytes = verify(&nonce)?;
+    let mut cipher = get_chacha20_cipher(&mut tkey)?;
     tkey.write_all(&sig_bytes)?;
 
     // this makes sure tpm signature is fine (will wait until it is if its not)
@@ -33,14 +37,17 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Err(ClientError::InvalidSig) => println!("sig is invalid should only happen if updating."),
         _ => return Err("host and tkey are out of sync restart the app")?,
     }
-    pass_enroll(&mut tkey)?;
-    match enroll(&mut tkey) {
+    pass_enroll(&mut tkey, &mut cipher)?;
+    match enroll(&mut tkey, &mut cipher) {
         Ok(_) => Ok(ExitCode::SUCCESS),
         Err(HostErr::CryptsetupErr) => Ok(ExitCode::FAILURE),
         Err(e) => return Err(e)?,
     }
 }
-fn pass_enroll(tkey: &mut Tkey) -> Result<(), Box<dyn std::error::Error>> {
+fn pass_enroll(
+    tkey: &mut Tkey,
+    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     match check_status(tkey) {
         Ok(ClientMessage::Ready4pass) => {}
         Err(e) => Err(e)?,
@@ -50,16 +57,16 @@ fn pass_enroll(tkey: &mut Tkey) -> Result<(), Box<dyn std::error::Error>> {
         "enrolling passphrase now,you'll need to type this in exactly everytime to unlock your disk. (wont be echoed)"
     );
     let pass1: Zeroizing<String> = rpassword::prompt_password(">")?.into();
-    println!("type in again for confirmation.");
+    println!("type password in again for confirmation.");
     let pass2: Zeroizing<String> = rpassword::prompt_password(">")?.into();
     if pass1 != pass2 {
         println!("passwords DID NOT match, try again.");
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
-        pass_enroll(tkey)?;
+        pass_enroll(tkey, cipher)?;
         return Ok(());
     };
-    let mut pass_len = pass1.len();
+    let mut pass_len = pass1.trim_end().len();
     if pass_len > u8::MAX as usize {
         pass_len.zeroize();
         tkey.write_all(&[0u8])?;
@@ -67,7 +74,9 @@ fn pass_enroll(tkey: &mut Tkey) -> Result<(), Box<dyn std::error::Error>> {
         Err(ClientError::PassLen)?;
     }
     tkey.write_all(&[pass_len as u8])?;
-    tkey.write_all(pass1.as_bytes())?;
+    let mut encrypted_pass = vec![0u8; pass_len];
+    cipher.apply_keystream_b2b(pass1.trim_end().as_bytes(), &mut encrypted_pass);
+    tkey.write_all(&encrypted_pass)?;
     pass_len.zeroize();
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
@@ -78,7 +87,10 @@ fn pass_enroll(tkey: &mut Tkey) -> Result<(), Box<dyn std::error::Error>> {
         _ => Err(ClientError::OutOfsync)?,
     }
 }
-fn enroll(tkey: &mut Tkey) -> Result<(), HostErr> {
+fn enroll(
+    tkey: &mut Tkey,
+    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+) -> Result<(), HostErr> {
     println!("to enroll you must type in your currently enrolled passphrase (won't be echoed)");
     let current_pass = rpassword::prompt_password(">")?;
     let current_pass_len = current_pass.len().to_string();
@@ -104,7 +116,10 @@ fn enroll(tkey: &mut Tkey) -> Result<(), HostErr> {
     };
     stdin.write_all(current_pass.as_bytes())?;
     {
+        let mut encrypted_keyfile = [0u8; 32];
         let mut keyfile = [0u8; 32];
+        cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
+        encrypted_keyfile.zeroize();
         tkey.read_exact(&mut keyfile)?;
         stdin.write_all(&keyfile)?;
         keyfile.zeroize();

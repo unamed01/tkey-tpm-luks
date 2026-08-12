@@ -94,6 +94,10 @@ pub enum ClientError {
     IOError = 0x15,
     ChaChaInit = 0x16,
     UnknownError,
+    //same thing as InvalidSig since we don't trust host any further if TPM let us know that it
+    //can't give us signed nonce than if it actually gave us invalid signed nonce, therefore both
+    //are treated the same.
+    TpmRefusedToSign,
 }
 
 #[panic_handler]
@@ -106,7 +110,7 @@ extern "C" fn main() -> ! {
     let mut nonce = [0u8; 32];
     random(&mut nonce, b"");
     write_u8_slice(&nonce);
-    let mut encryption_nonce = [0u8; 32];
+    let mut encryption_nonce = [0u8; 12];
     random(&mut encryption_nonce, b"");
     write_u8_slice(&encryption_nonce);
     let mut seed = [0u8; 32];
@@ -117,6 +121,8 @@ extern "C" fn main() -> ! {
         rustkey::abort()
     }
     let mut rng = ChaCha20Rng::from_seed(seed);
+    zeroize(&mut cdi);
+    zeroize(&mut seed);
     let tkey_secret = EphemeralSecret::random_from_rng(&mut rng);
     let tkey_public = PublicKey::from(&tkey_secret);
     write_u8_slice(tkey_public.as_bytes());
@@ -140,11 +146,16 @@ extern "C" fn main() -> ! {
         // allows updates which change relevant PCR values and decryption on another clean system after tampering was detected
         // while trying its best to prevent social engineering attacks against a untrustworthy system
         // yellow LED is choosen to make it easily distinguishable from a panic which flashes red
-        Err(e) => {
-            write_u8(e as u8);
+        Err(ClientError::TpmRefusedToSign) => {
+            //send the byte same, no point in  treating either one differently
+            write_u8(ClientError::InvalidSig as u8);
             if !request(30, LED_YELLOW) {
                 panic!()
             }
+        }
+        Err(e) => {
+            write_u8(e as u8);
+            panic!()
         }
     }
     let mut attempts = 0;
@@ -165,8 +176,13 @@ extern "C" fn main() -> ! {
             sleep(3);
             continue;
         };
+        let mut encrypted_passphrase = [0u8; 256];
+        read_into(&mut encrypted_passphrase[..pass_len as usize]);
         let mut passphrase = [0u8; 256];
-        read_into(&mut passphrase[..pass_len as usize]);
+        cipher.apply_keystream_b2b(
+            &encrypted_passphrase[..pass_len as usize],
+            &mut passphrase[..pass_len as usize],
+        );
         let mut keyfile = [0u8; 32];
         let mut cdi = read_cdi();
         if blake2s(&mut keyfile, &cdi, &passphrase[..pass_len as usize]).is_err() {
@@ -202,7 +218,7 @@ fn verify_sig(nonce: [u8; 32]) -> Result<(), ClientError> {
     //shouldnt fail since we've checked pubkey at compile time
     let key_bytes: &[u8; 91] = include_bytes!("../../tpm_pubkey_raw.bin");
     let tpm_pubkey =
-        VerifyingKey::from_sec1_bytes(&key_bytes[27..91]).map_err(|_| ClientError::BadPubkey)?;
+        VerifyingKey::from_sec1_bytes(&key_bytes[26..91]).map_err(|_| ClientError::BadPubkey)?;
     let mut status = [0u8; 1];
     read_into(&mut status);
     if status[0] == HostMessage::TpmSigned as u8 {
@@ -215,7 +231,7 @@ fn verify_sig(nonce: [u8; 32]) -> Result<(), ClientError> {
         write_u8(ClientMessage::GoodSig as u8);
         Ok(())
     } else {
-        Err(ClientError::InvalidSig)
+        Err(ClientError::TpmRefusedToSign)
     }
 }
 
