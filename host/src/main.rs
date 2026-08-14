@@ -72,14 +72,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     }
     //make sure it doesn't mut'd later
     let trustworthy = trustworthy;
-    let mut tries = 0;
-    loop {
-        if tries >= 3 {
-            eprintln!("decryption failed too many attempts.");
-            return Ok(ExitCode::FAILURE);
-        }
-        tries += 1;
-
+    //mirrors 3 tries client allows.
+    for tries in 1..=3 {
         let status = check_status(&mut tkey);
         //first thing clientapp should do is signal its ready 4 passphrase if it does not print the error and exit
         if !matches!(status, Ok(ClientMessage::Ready4pass)) {
@@ -114,10 +108,12 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             }
             Err(e) => {
                 println!("{e}");
-                return Err(e)?;
+                Err(e)?;
             }
         };
     }
+    println!("couldn't decrypted system, 3/3 tries exhausted.");
+    Ok(ExitCode::FAILURE)
 }
 fn ask_for_password(
     tkey: &mut Tkey,
@@ -149,7 +145,7 @@ fn ask_for_password(
         passphrase.zeroize();
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
-        return Err(ClientError::PassLen);
+        Err(ClientError::PassLen)?;
     }
     //writting password length to client
     tkey.write_all(&[pass_len as u8])?;
