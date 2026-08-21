@@ -4,16 +4,13 @@
 // another warning is shown at systemd-ask-password (even though we can guarantee it since we
 // couldnt verify software running on host) this is vital to allow user to update kernel,xen or grub
 // which is extremely important
-use chacha20::cipher::stream::{StreamCipher, StreamCipherCoreWrapper};
-use chacha20::{ChaChaCore, R20, variants::Ietf};
+use chacha20::cipher::stream::StreamCipher;
 use host::{
-    ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, get_chacha20_cipher,
-    load_app, verify,
+    ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status, 
 };
 use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
-use std::thread;
 use std::{
     error::Error,
     io::Read,
@@ -29,56 +26,20 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         .status()?
         .success();
     if !mount {
-        Err("failed to mount")?;
+        Err("failed to mount, auto detection of boot device was wrong.")?;
     }
-    let mut tkey = Tkey::new()?;
-    {
-        let bin = fs::read("/mnt/boot/client")?;
 
-        load_app(&mut tkey, bin.as_slice())?;
-    }
-    let mut nonce = [0u8; 32];
-    tkey.read_exact(&mut nonce)?;
-    //both TPM and Tkey are pretty slow so this saves a bit of time (kinda important here for UX)
-    let verify_thread = thread::spawn(move || -> Result<[u8; 64], String> {
-        verify(&nonce).map_err(|e| e.to_string())
-    });
+    let bin = fs::read("/mnt/boot/client")?;
 
-    let mut cipher = get_chacha20_cipher(&mut tkey)?;
+    let (mut tkey, trustworthy,mut cipher) = auth_with_tkey_and_tpm(bin)?;
 
-    let mut trustworthy = match verify_thread.join().map_err(|e| format!("err {e:?}"))? {
-        Ok(sig) => {
-            tkey.write_all(&[HostMessage::TpmSigned as u8])?;
-            tkey.write_all(&sig)?;
-            true
-        }
-        Err(e) => {
-            eprintln!("ERR: {e}");
-            eprintln!("tpm REFUSED, to sign nonce");
-            tkey.write_all(&[HostErr::TpmRefusedToSign as u8])?;
-            false
-        }
-    };
-    match check_status(&mut tkey) {
-        Ok(ClientMessage::GoodSig) => println!(
-            "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
-        ),
-        Err(e @ (ClientError::InvalidSig | ClientError::MalformedSig | ClientError::BadPubkey)) => {
-            eprintln!("{}", e);
-            eprintln!("tkey FAILED to verify nonce signature system is untrustworthy.");
-            trustworthy = false;
-        }
-        _ => return Err(ClientError::OutOfsync)?,
-    }
-    //make sure it doesn't mut'd later
-    let trustworthy = trustworthy;
     //mirrors 3 tries client allows.
     for tries in 1..=3 {
         let status = check_status(&mut tkey);
         //first thing clientapp should do is signal its ready 4 passphrase if it does not print the error and exit
         if !matches!(status, Ok(ClientMessage::Ready4pass)) {
-            println!("expected Ready4pass signal received:");
-            let _ = dbg!(&status);
+            eprintln!("expected Ready4pass, but instead received :");
+            dbg!(&status);
             Err(ClientError::OutOfsync)?
         }
 
@@ -118,7 +79,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 fn ask_for_password(
     tkey: &mut Tkey,
     trustworthy: bool,
-    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+    cipher: &mut host::ChaCha20Cipher,
 ) -> Result<(), ClientError> {
     //can't control whether the warning will appear if system hasn't been verified but might as well
     //try to warn user twice (tkey already gates proceeding with touch)
@@ -168,7 +129,7 @@ fn ask_for_password(
 
 fn decrypt(
     tkey: &mut Tkey,
-    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+    cipher: &mut host::ChaCha20Cipher,
 ) -> Result<(), HostErr> {
     let args = &[
         "open",

@@ -12,6 +12,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::os::fd::AsRawFd;
+use std::thread;
 use std::str::FromStr;
 use termios::{Termios, cfmakeraw, tcsetattr};
 use tss_esapi::structures::MaxBuffer;
@@ -29,6 +30,8 @@ use tss_esapi::{
     },
 };
 use x25519_dalek::{EphemeralSecret, PublicKey};
+// helper type for exact ChaCha20 type for the cipher type we'll be using in this case to encrypt.
+pub type ChaCha20Cipher = StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>;
 
 //make sure you populate these with correct values
 pub const LUKSUUID: &str = env!("luksUUID");
@@ -90,7 +93,7 @@ impl Display for HostErr {
             HostErr::CryptsetupKilled => write!(f, "cryptsetup was killed.."),
             HostErr::TpmError => write!(f, "tpm sent malformed sig"),
             HostErr::TpmRefusedToSign => {
-                write!(f, "tpm REFUSED to sign this system is untrustworthy")
+                write!(f, "tpm REFUSED to sign this system is unsuccessful_auth")
             }
             HostErr::UnknownError => write!(
                 f,
@@ -279,6 +282,7 @@ pub fn verify(nonce: &[u8; 32]) -> Result<[u8; 64], Box<dyn Error>> {
     Ok(sig_bytes)
 }
 
+// WIP.
 pub fn get_key_seed() -> Result<[u8; 32], Box<dyn Error>> {
     let mut context = Context::new(TctiNameConf::from_str("device:/dev/tpmrm0")?)?;
 
@@ -310,6 +314,46 @@ pub fn get_key_seed() -> Result<[u8; 32], Box<dyn Error>> {
 
     let seed_bytes = [0u8; 32];
     Ok(seed_bytes)
+}
+
+// authenticates with TPM and Tkey in paralel 
+pub fn auth_with_tkey_and_tpm(bin: Vec<u8>) -> Result<(Tkey,bool,ChaCha20Cipher), Box<dyn Error>>{
+    let mut tkey = Tkey::new()?;
+    load_app(&mut tkey, bin.as_slice())?;
+    let mut nonce = [0u8; 32];
+    tkey.read_exact(&mut nonce)?;
+    //both TPM and Tkey are pretty slow so this saves a bit of time (kinda important here for UX)
+    let verify_thread = thread::spawn(move || -> Result<[u8; 64], String> {
+        verify(&nonce).map_err(|e| e.to_string())
+    });
+
+    let cipher = get_chacha20_cipher(&mut tkey)?;
+
+    let mut successful_auth = match verify_thread.join().map_err(|e| format!("err {e:?}"))? {
+        Ok(sig) => {
+            tkey.write_all(&[HostMessage::TpmSigned as u8])?;
+            tkey.write_all(&sig)?;
+            true
+        }
+        Err(e) => {
+            eprintln!("ERR: {e}");
+            eprintln!("tpm REFUSED, to sign nonce");
+            tkey.write_all(&[HostErr::TpmRefusedToSign as u8])?;
+            false
+        }
+    };
+    match check_status(&mut tkey) {
+        Ok(ClientMessage::GoodSig) => println!(
+            "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
+        ),
+        Err(e @ (ClientError::InvalidSig | ClientError::MalformedSig | ClientError::BadPubkey)) => {
+            eprintln!("{}", e);
+            eprintln!("tkey FAILED to verify nonce signature, system is considered untrustworthy.");
+            successful_auth = false;
+        }
+        _ => return Err(ClientError::OutOfsync)?,
+    }
+    Ok((tkey,successful_auth,cipher))
 }
 
 // loads client app onto tkey.
@@ -363,9 +407,9 @@ pub fn load_app(tkey: &mut Tkey, bin: &[u8]) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-// communicates with tkey to get SS trough assymetric crypto
+// communicates with tkey to get SS trough assymetric crypto (X25519)
 // # Errors
-// if we fail to communicate with tkey (e.g gets unplugged)
+// if we fail to communicate with tkey. e.g gets unplugged (shouldn't Error)
 pub fn get_chacha20_cipher(
     tkey: &mut Tkey,
 ) -> Result<StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>, Box<dyn Error>> {

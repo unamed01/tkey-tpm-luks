@@ -1,10 +1,8 @@
 //enrollment works by doing exactly what we'd do at runtime with less eror handling we want to make
 //sure we give host a somewhat known good state
-use chacha20::cipher::stream::{StreamCipher, StreamCipherCoreWrapper};
-use chacha20::{ChaChaCore, R20, variants::Ietf};
+use chacha20::cipher::stream::StreamCipher;
 use host::{
-    ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, get_chacha20_cipher,
-    load_app, verify,
+    ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status, 
 };
 use std::fs;
 use std::io::Write;
@@ -17,17 +15,14 @@ use zeroize::{Zeroize, Zeroizing};
 //this goes trough the exact same process as it would in initramfs but instead piping into
 //cryptsetup to enroll a keyslot
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let mut tkey = Tkey::new()?;
     let bin = fs::read("../../client/clientApp")?;
     if bin.len() < 1000 {
         panic!("ERR: bad tkey binary,did you recompile before trying to enroll?")
     }
-    load_app(&mut tkey, bin.as_slice())?;
-    let mut nonce = [0u8; 32];
-    tkey.read_exact(&mut nonce)?;
-    let sig_bytes = verify(&nonce)?;
-    let mut cipher = get_chacha20_cipher(&mut tkey)?;
-    tkey.write_all(&sig_bytes)?;
+    let (mut tkey,trustworthy ,mut cipher) = auth_with_tkey_and_tpm(bin)?;
+    if !trustworthy {
+        println!("failed to auth with tpm.")
+    }
 
     // this makes sure tpm signature is fine (will wait until it is if its not)
     match check_status(&mut tkey) {
@@ -46,7 +41,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
 }
 fn pass_enroll(
     tkey: &mut Tkey,
-    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+    cipher: &mut host::ChaCha20Cipher,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match check_status(tkey) {
         Ok(ClientMessage::Ready4pass) => {}
@@ -89,7 +84,7 @@ fn pass_enroll(
 }
 fn enroll(
     tkey: &mut Tkey,
-    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+    cipher: &mut host::ChaCha20Cipher,
 ) -> Result<(), HostErr> {
     println!("to enroll you must type in your currently enrolled passphrase (won't be echoed)");
     let current_pass = rpassword::prompt_password(">")?;
