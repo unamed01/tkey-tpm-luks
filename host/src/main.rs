@@ -6,7 +6,8 @@
 // which is extremely important
 use chacha20::cipher::stream::StreamCipher;
 use host::{
-    ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status, 
+    ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status,
+    get_argon2,
 };
 use std::fs;
 use std::io::Write;
@@ -31,7 +32,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     let bin = fs::read("/mnt/boot/client")?;
 
-    let (mut tkey, trustworthy,mut cipher) = auth_with_tkey_and_tpm(bin)?;
+    let (mut tkey, trustworthy, mut cipher) = auth_with_tkey_and_tpm(bin)?;
 
     //mirrors 3 tries client allows.
     for tries in 1..=3 {
@@ -93,29 +94,24 @@ fn ask_for_password(
         .output()?;
 
     let mut passphrase_bytes = pass.stdout;
-    let mut passphrase = match String::try_from(passphrase_bytes.clone()) {
-        Ok(k) => k,
-        Err(e) => {
-            eprintln!("passphrase to utf-8 parse error: {e}");
-            String::from_utf8_lossy(&passphrase_bytes).to_string()
-        }
-    };
-    passphrase_bytes.zeroize();
-    let mut pass_len = passphrase.trim_end().len();
-    if pass_len > u8::MAX as usize || pass_len < 8 {
-        passphrase.zeroize();
+    let mut pass_len = passphrase_bytes.len();
+    if pass_len < 8 {
+        passphrase_bytes.zeroize();
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
         Err(ClientError::PassLen)?;
     }
-    //writting password length to client
-    tkey.write_all(&[pass_len as u8])?;
-    //sending actual password to client
-    let mut passphrase_encrypted = vec![0u8; pass_len];
-    cipher.apply_keystream_b2b(passphrase.trim_end().as_bytes(), &mut passphrase_encrypted);
-    tkey.write_all(&passphrase_encrypted)?;
-
-    passphrase.zeroize();
+    let argon2 = get_argon2();
+    let mut hashed_pass = [0u8; 32];
+    if let Err(e) = argon2.hash_password_into(&passphrase_bytes, host::SALT, &mut hashed_pass) {
+        eprintln!("ERR: failed to hash passphrase");
+        eprintln!("this shouldn't happen, please report this issue.");
+        eprintln!("{e}");
+        return Err(ClientError::UnknownError);
+    }
+    let mut encrypted_hashed_pass = [0u8; 32];
+    cipher.apply_keystream_b2b(&hashed_pass, &mut encrypted_hashed_pass);
+    tkey.write_all(&encrypted_hashed_pass)?;
     pass_len.zeroize();
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
@@ -127,10 +123,7 @@ fn ask_for_password(
     }
 }
 
-fn decrypt(
-    tkey: &mut Tkey,
-    cipher: &mut host::ChaCha20Cipher,
-) -> Result<(), HostErr> {
+fn decrypt(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), HostErr> {
     let args = &[
         "open",
         "--key-file",
@@ -143,7 +136,6 @@ fn decrypt(
     ];
     let mut keyfile = [0u8; 32];
     tkey.read_exact(&mut keyfile)?;
-    cipher.apply_keystream(&mut keyfile);
     let mut cryptsetup = Command::new("/usr/bin/cryptsetup")
         .args(args)
         .stdin(Stdio::piped())
@@ -155,6 +147,7 @@ fn decrypt(
                 return Err(HostErr::PipeError);
             }
         };
+        cipher.apply_keystream(&mut keyfile);
         match stdin.write_all(&keyfile) {
             Ok(()) => keyfile.zeroize(),
             Err(e) => {

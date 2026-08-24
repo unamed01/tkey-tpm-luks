@@ -8,6 +8,7 @@
 use chacha20::cipher::StreamCipher;
 use chacha20::rand_core::SeedableRng;
 use chacha20::{ChaCha20, ChaCha20Rng, KeyIvInit};
+use zeroize::Zeroize;
 use core::arch::global_asm;
 use core::ptr;
 use core::sync::atomic::{self, Ordering};
@@ -116,13 +117,13 @@ extern "C" fn main() -> ! {
     let mut seed = [0u8; 32];
     let mut cdi = read_cdi();
     if blake2s(&mut seed, &cdi, b"nI2jlrOM9nlCnWXY/BpR0qe1Al4IltMz%").is_err() {
-        zeroize(&mut cdi);
+        cdi.zeroize();
         write_u8(ClientError::Blake2 as u8);
         rustkey::abort()
     }
     let mut rng = ChaCha20Rng::from_seed(seed);
-    zeroize(&mut cdi);
-    zeroize(&mut seed);
+    cdi.zeroize();
+    seed.zeroize();
     let tkey_secret = EphemeralSecret::random_from_rng(&mut rng);
     let tkey_public = PublicKey::from(&tkey_secret);
     write_u8_slice(tkey_public.as_bytes());
@@ -166,41 +167,28 @@ extern "C" fn main() -> ! {
         attempts += 1;
         //signal to host were ready for passphrase
         write_u8(ClientMessage::Ready4pass as u8);
-        let mut len_buf = [0u8; 1];
-        read_into(&mut len_buf);
-        let pass_len: u8 = len_buf[0];
-        if pass_len < 8 {
-            write_u8(ClientError::PassLen as u8);
-            let mut drain = [0u8; 256];
-            read_into(&mut drain[..pass_len as usize]);
-            sleep(3);
-            continue;
-        };
-        let mut encrypted_passphrase = [0u8; 256];
-        read_into(&mut encrypted_passphrase[..pass_len as usize]);
-        let mut passphrase = [0u8; 256];
-        cipher.apply_keystream_b2b(
-            &encrypted_passphrase[..pass_len as usize],
-            &mut passphrase[..pass_len as usize],
-        );
+        let mut encrypted_host_hash = [0u8;32];
+        read_into(&mut encrypted_host_hash);
+        let mut host_hash = [0u8;32];
+        cipher.apply_keystream_b2b(&encrypted_host_hash, &mut host_hash);
         let mut keyfile = [0u8; 32];
         let mut cdi = read_cdi();
-        if blake2s(&mut keyfile, &cdi, &passphrase[..pass_len as usize]).is_err() {
-            zeroize(&mut cdi);
-            zeroize(&mut passphrase);
-            zeroize(&mut keyfile);
+        if blake2s(&mut keyfile, &cdi, &host_hash).is_err() {
+            cdi.zeroize();
+            host_hash.zeroize();
+            keyfile.zeroize();
             write_u8(ClientError::Blake2 as u8);
             sleep(3);
             continue;
         }
-        zeroize(&mut passphrase);
+        host_hash.zeroize();
         let mut encrypted_keyfile = [0u8; 32];
         cipher.apply_keystream_b2b(&keyfile, &mut encrypted_keyfile);
-        zeroize(&mut keyfile);
+        keyfile.zeroize();
         write_u8(ClientMessage::GoodPass as u8);
         write_u8_slice(&encrypted_keyfile);
-        zeroize(&mut encrypted_keyfile);
-        zeroize(&mut cdi);
+        encrypted_keyfile.zeroize();
+        cdi.zeroize();
         let mut success = [0u8; 1];
         read_into(&mut success);
         if success[0] == HostMessage::DecryptionSuccess as u8 {
@@ -240,11 +228,4 @@ fn write_u8_slice(slice: &[u8]) {
     for b in slice.iter() {
         write_u8(*b);
     }
-}
-//"custom" zeroize func since zeroize requires global alloc. this is functionally equivalent to .zeroize()
-fn zeroize(buf: &mut [u8]) {
-    for byte in buf.iter_mut() {
-        unsafe { ptr::write_volatile(byte, 0) };
-    }
-    atomic::compiler_fence(Ordering::SeqCst);
 }

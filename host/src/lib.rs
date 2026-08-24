@@ -1,3 +1,4 @@
+use argon2::{Algorithm, Argon2, Params};
 //main lib which provides all relevant types needed for functioning plus verify() func its split
 //into one into some in client and some in host to make sure client doesnt need to pull #[derive(Debug)]
 //which increase binary size by a lot.
@@ -12,8 +13,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::os::fd::AsRawFd;
-use std::thread;
 use std::str::FromStr;
+use std::thread;
 use termios::{Termios, cfmakeraw, tcsetattr};
 use tss_esapi::structures::MaxBuffer;
 use tss_esapi::{
@@ -39,6 +40,8 @@ pub const LUKSUUID: &str = env!("luksUUID");
 pub const BOOTDEVICE: &str = env!("bootdev");
 //whatever luks2 encrypted partition is usually /dev/nvme0n1p3 but do check what is in your system.
 pub const ENCRYPTEDDISK: &str = env!("luksdev");
+// salt for argon2 operations.
+pub const SALT: &[u8] = include_bytes!("../../SALT");
 #[repr(u8)]
 #[derive(Debug)]
 pub enum ClientMessage {
@@ -316,8 +319,17 @@ pub fn get_key_seed() -> Result<[u8; 32], Box<dyn Error>> {
     Ok(seed_bytes)
 }
 
-// authenticates with TPM and Tkey in paralel 
-pub fn auth_with_tkey_and_tpm(bin: Vec<u8>) -> Result<(Tkey,bool,ChaCha20Cipher), Box<dyn Error>>{
+//make sure argon2 is consistent accross files provides sane defaults.
+pub fn get_argon2() -> Argon2<'static> {
+    let params =
+        Params::new(131072 * 1024, 4, 4, None).expect("hardcoded argon2 params are wrong.");
+    Argon2::new(Algorithm::Argon2id, argon2::Version::V0x13, params)
+}
+
+// authenticates with TPM and Tkey in paralel
+pub fn auth_with_tkey_and_tpm(
+    bin: Vec<u8>,
+) -> Result<(Tkey, bool, ChaCha20Cipher), Box<dyn Error>> {
     let mut tkey = Tkey::new()?;
     load_app(&mut tkey, bin.as_slice())?;
     let mut nonce = [0u8; 32];
@@ -353,7 +365,7 @@ pub fn auth_with_tkey_and_tpm(bin: Vec<u8>) -> Result<(Tkey,bool,ChaCha20Cipher)
         }
         _ => return Err(ClientError::OutOfsync)?,
     }
-    Ok((tkey,successful_auth,cipher))
+    Ok((tkey, successful_auth, cipher))
 }
 
 // loads client app onto tkey.

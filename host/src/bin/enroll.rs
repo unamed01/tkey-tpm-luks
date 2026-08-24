@@ -2,7 +2,7 @@
 //sure we give host a somewhat known good state
 use chacha20::cipher::stream::StreamCipher;
 use host::{
-    ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status, 
+    ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status,
 };
 use std::fs;
 use std::io::Write;
@@ -19,7 +19,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     if bin.len() < 1000 {
         panic!("ERR: bad tkey binary,did you recompile before trying to enroll?")
     }
-    let (mut tkey,trustworthy ,mut cipher) = auth_with_tkey_and_tpm(bin)?;
+    let (mut tkey, trustworthy, mut cipher) = auth_with_tkey_and_tpm(bin)?;
     if !trustworthy {
         println!("failed to auth with tpm.")
     }
@@ -61,17 +61,23 @@ fn pass_enroll(
         pass_enroll(tkey, cipher)?;
         return Ok(());
     };
-    let mut pass_len = pass1.trim_end().len();
-    if pass_len > u8::MAX as usize {
+    let mut pass_len = pass1.len();
+    if pass_len < 8 {
         pass_len.zeroize();
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
         Err(ClientError::PassLen)?;
     }
-    tkey.write_all(&[pass_len as u8])?;
-    let mut encrypted_pass = vec![0u8; pass_len];
-    cipher.apply_keystream_b2b(pass1.trim_end().as_bytes(), &mut encrypted_pass);
-    tkey.write_all(&encrypted_pass)?;
+    let argon2 = host::get_argon2();
+    let mut password_hash = [0u8; 32];
+    if let Err(e) = argon2.hash_password_into(pass1.as_bytes(), host::SALT, &mut password_hash) {
+        eprintln!("ERR: failed to hash passphrase");
+        eprintln!("this shouldn't happen, please report this issue.");
+        eprintln!("{e}");
+        Err("{e}")?;
+    }
+    cipher.apply_keystream(&mut password_hash);
+    tkey.write_all(&password_hash)?;
     pass_len.zeroize();
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
@@ -82,10 +88,7 @@ fn pass_enroll(
         _ => Err(ClientError::OutOfsync)?,
     }
 }
-fn enroll(
-    tkey: &mut Tkey,
-    cipher: &mut host::ChaCha20Cipher,
-) -> Result<(), HostErr> {
+fn enroll(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), HostErr> {
     println!("to enroll you must type in your currently enrolled passphrase (won't be echoed)");
     let current_pass = rpassword::prompt_password(">")?;
     let current_pass_len = current_pass.len().to_string();

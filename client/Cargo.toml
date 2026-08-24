@@ -4,15 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rustkey = "0.5"
-p256 = { version = "0.14", default-features = false, features = [
+rustkey = "0.5.0"
+p256 = { version = "0.14.0", default-features = false, features = [
   "pkcs8",
   "ecdsa",
 ] }
 x25519-dalek = { version = "3.0.0", default-features = false }
 chacha20 = { version = "0.10.1", features = ["cipher", "rng"] }
+zeroize = { version = "1.9.0", default-features = false }
 [build-dependencies]
-p256 = { version = "0.14", default-features = false, features = [
+p256 = { version = "0.14.0", default-features = false, features = [
   "ecdsa",
   "pkcs8",
 ] }

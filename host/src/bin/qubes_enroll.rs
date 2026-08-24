@@ -105,11 +105,17 @@ fn pass_enroll(
         pass_enroll(tkey, cipher)?;
         return Ok(());
     }
-    tkey.write_all(&[pass_len as u8])?;
-    let mut encrypted_passphrase = vec![0u8; pass_len];
-    cipher.apply_keystream_b2b(pass1.trim_end().as_bytes(), &mut encrypted_passphrase);
-    pass_len.zeroize();
-    tkey.write_all(&encrypted_passphrase)?;
+    let argon2 = host::get_argon2();
+    let mut hashed_pass = [0u8; 32];
+    if let Err(e) = argon2.hash_password_into(pass1.as_bytes(), host::SALT, &mut hashed_pass) {
+        eprintln!("ERR: failed to hash passphrase");
+        eprintln!("this shouldn't happen, please report this issue.");
+        eprintln!("{e}");
+        Err("{e}")?;
+    }
+    cipher.apply_keystream(&mut hashed_pass);
+    tkey.write_all(&hashed_pass)?;
+    hashed_pass.zeroize();
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
             println!("keyfile received sending onto cryptsetup for decryption");
