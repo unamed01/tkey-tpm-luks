@@ -90,7 +90,7 @@ pub enum ClientError {
     InvalidSig = 0x13,
     BadPubkey = 0x14,
     IOError = 0x15,
-    TpmRefused = 0x13,
+    TpmRefused,
     UnknownError,
 }
 

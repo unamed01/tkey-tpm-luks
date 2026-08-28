@@ -73,7 +73,10 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         println!("success!!");
         Ok(ExitCode::SUCCESS)
     } else {
-        println!("failure, was passphrase correct?");
+        println!("FAILED, was passphrase correct? please run qubes_enrollpt2.sh again.");
+        println!("press enter to close the program.");
+        let mut string = String::new();
+        std::io::stdin().read_line(&mut string)?;
         Ok(ExitCode::FAILURE)
     }
 }

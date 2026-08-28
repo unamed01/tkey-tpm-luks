@@ -75,7 +75,7 @@ After everything is enrolled just reboot type passphrase in and everything shoul
 
 **please open a github issue if any of this doesn't work!**
 
-Firstly make a fully new builder Qube clone this repo and audit the code inside it. And install deps (deps are for debian-13-minimal)
+Firstly make a fully new builder Qube clone this repo and audit the code inside it. And install deps
 ```bash
 sudo apt install llvm rustup libtss2-dev gcc libudev-dev
 sudo apt install qubes-usb-proxy #if using minimal
@@ -84,9 +84,10 @@ rustup target add riscv32i-unknown-none-elf
 git clone https://github.com/unamed01/tkey-tpm-luks.git
 ```
 
-After you've looked at the code from dom0 take the qubes setup script and move into dom0
+After you've looked at the code from dom0 take the qubes setup script and move into dom0, installing the single dependency.
 ```bash
 qvm-run -p builder cat /home/user/tkey-tpm-luks/qubes_enrollpt1.sh > qubes_enrollpt1.sh
+sudo qubes-dom0-update grub2-efi-x64-modules #make sure you have qubes TPM module in dom0
 sudo bash qubes_enrollpt1.sh #check the script before running it.
 ```
 now you just reboot to update PCR values and run part2 which part1 has already moved onto dom0 for you into /root/tkey-files
