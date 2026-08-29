@@ -18,3 +18,5 @@ x25519-dalek = { version = "3.0.0", default-features = false, features = [
 termios = "0.3.3"
 getrandom = "0.4.3"
 argon2 = "0.5.3"
+nix = { version = "0.31.3", features = ["fs"] }
+libc = "0.2.189"

@@ -3,16 +3,18 @@ use argon2::{Algorithm, Argon2, Params};
 //into one into some in client and some in host to make sure client doesnt need to pull #[derive(Debug)]
 //which increase binary size by a lot.
 use blake2::{Blake2s256, Digest as BlakeDigest};
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::error::Error;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::path::Path;
 
 use chacha20::cipher::stream::StreamCipherCoreWrapper;
 use chacha20::{ChaCha20, ChaCha20Rng, KeyIvInit, rand_core::SeedableRng};
 use chacha20::{ChaChaCore, R20, variants::Ietf};
 use std::fmt::Display;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::ops::{Deref, DerefMut};
-use std::os::fd::AsRawFd;
 use std::str::FromStr;
 use std::thread;
 use termios::{Termios, cfmakeraw, tcsetattr};
@@ -42,6 +44,7 @@ pub const BOOTDEVICE: &str = env!("bootdev");
 pub const ENCRYPTEDDISK: &str = env!("luksdev");
 // salt for argon2 operations.
 pub const SALT: &[u8] = include_bytes!("../../SALT");
+
 #[repr(u8)]
 #[derive(Debug)]
 pub enum ClientMessage {
@@ -166,18 +169,41 @@ impl Display for ClientError {
 }
 pub struct Tkey {
     tkey: File,
+    _fd: OwnedFd,
 }
 impl Tkey {
     pub fn new() -> Result<Tkey, Box<dyn Error>> {
-        let tkey = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/ttyACM0")?;
-        let tkey_file = tkey.as_raw_fd();
-        let mut termios = Termios::from_fd(tkey_file)?;
+        let path = Path::new("/dev/ttyACM0");
+        let fd = nix::fcntl::open(
+            path,
+            OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+            nix::sys::stat::Mode::empty(),
+        )?;
+
+        let mut termios = Termios::from_fd(fd.as_raw_fd())?;
+        termios.c_cflag |= libc::CREAD | libc::CLOCAL;
         cfmakeraw(&mut termios);
-        tcsetattr(tkey_file, termios::TCSANOW, &termios)?;
-        Ok(Tkey { tkey })
+        tcsetattr(fd.as_raw_fd(), termios::TCSANOW, &termios)?;
+
+        fcntl(&fd, FcntlArg::F_SETFL(OFlag::empty()))?;
+        let baud = 62500;
+        let mut tio: libc::termios2 = unsafe { std::mem::zeroed() };
+        if unsafe { libc::ioctl(fd.as_raw_fd(), libc::TCGETS2, &mut tio) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+
+        tio.c_cflag &= !libc::CBAUD;
+        tio.c_cflag |= libc::BOTHER;
+        tio.c_ispeed = baud;
+        tio.c_ospeed = baud;
+
+        if unsafe { libc::ioctl(fd.as_raw_fd(), libc::TCSETS2, &tio) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(Tkey {
+            tkey: File::from(fd.try_clone()?),
+            _fd: fd,
+        })
     }
 }
 impl Read for Tkey {

@@ -8,6 +8,7 @@ fi
 
 grub_fail() {
   echo "make sure you have grub2-efi-x64-modules installed."
+  cp /boot/efi/EFI/BOOT/BOOTX64.EFI.bak /boot/efi/EFI/BOOT/BOOTX64.EFI
   cp /boot/efi/EFI/qubes/grubx64.efi.bak /boot/efi/EFI/qubes/grubx64.efi
   exit 8
 }
@@ -16,6 +17,7 @@ bootD="$(findmnt -no SOURCE /boot)"
 luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
 luksD="/dev/nvme0n1p3" #change here if you didn't use auto partitioning.
 systemdsvc="$(systemctl list-units | grep 'systemd-cryptsetup@luks' | grep -v '/run/credentials' | awk '{print $1}')"
+systemdsvc="${systemdsvc//\\/\\\\}"
 mkdir -p ~/tkey-files && cd ~/tkey-files
 if ! cryptsetup isLuks "$luksD"; then
   echo "$luksD is NOT a luks device change \$luksD on this script to your correct disk before proceeding."
@@ -26,9 +28,7 @@ if ! qvm-run "$builder" 'test -d /home/user/tkey-tpm-luks '; then
   echo "please make sure you've cloned the repo AND checked the code in $builder"
   exit 4
 fi
-head -c 32 /dev/urandom >SALT
-qvm-copy-to-vm "$builder" SALT
-qvm-run "$builder" 'mv /home/user/QubesIncoming/dom0/SALT /home/user/tkey-tpm-luks/SALT'
+
 qvm-run -p "$builder" "cd /home/user/tkey-tpm-luks/host && bootdev=\"${bootD}\" luksdev=\"${luksD}\" luksUUID=\"${luksUUID}\" cargo build --release"
 mkdir -p dracut/
 #these are for later
@@ -56,11 +56,27 @@ if ! grep 'rd.qubes.dom0_usb' /etc/default/grub; then
 fi
 # Backup first
 test -f /boot/efi/EFI/BOOT/BOOTX64.EFI.bak || cp /boot/efi/EFI/BOOT/BOOTX64.EFI /boot/efi/EFI/BOOT/BOOTX64.EFI.bak
+test -f /boot/efi/EFI/qubes/grubx64.efi.bak || cp /boot/efi/EFI/qubes/grubx64.efi /boot/efi/EFI/qubes/grubx64.efi.bak
 #modules from https://github.com/QubesOS/qubes-grub2/blob/00e34f13235d39f81fa0130500db43aa803c8a60/grub2.spec.in#L441 which are default.
 # this is needed since by default qubes' grub doesnt have the tpm module so this is needed to make sure PCRs 8,9 arent 0s.
 grub2-mkimage \
   -O x86_64-efi \
   -o /boot/efi/EFI/BOOT/BOOTX64.EFI \
+  -p /EFI/qubes \
+  -d /usr/lib/grub/x86_64-efi \
+  all_video boot btrfs cat configfile cryptodisk echo efifwsetup efinet ext2 f2fs \
+  fat font gcry_rijndael gcry_rsa gcry_serpent gcry_sha256 gcry_twofish gcry_whirlpool \
+  gfxmenu gfxterm gzio halt hfsplus http increment iso9660 jpeg \
+  loadenv loopback linux lvm lsefi lsefimmap luks luks2 mdraid09 mdraid1x minicmd net \
+  multiboot multiboot2 normal part_apple part_msdos part_gpt \
+  password_pbkdf2 pgp png reboot regexp search search_fs_uuid search_fs_file \
+  search_label serial sleep syslinuxcfg test tftp video xfs zstd \
+  backtrace chain usb usbserial_common usbserial_pl2303 usbserial_ftdi usbserial_usbdebug \
+  keylayouts at_keyboard \
+  tpm_verifier || grub_fail
+grub2-mkimage \
+  -O x86_64-efi \
+  -o /boot/efi/EFI/qubes/grubx64.efi \
   -p /EFI/qubes \
   -d /usr/lib/grub/x86_64-efi \
   all_video boot btrfs cat configfile cryptodisk echo efifwsetup efinet ext2 f2fs \
