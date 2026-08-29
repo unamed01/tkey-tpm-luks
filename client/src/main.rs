@@ -8,10 +8,7 @@
 use chacha20::cipher::StreamCipher;
 use chacha20::rand_core::SeedableRng;
 use chacha20::{ChaCha20, ChaCha20Rng, KeyIvInit};
-use zeroize::Zeroize;
 use core::arch::global_asm;
-use core::ptr;
-use core::sync::atomic::{self, Ordering};
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use rustkey::io::{read_into, write_u8};
 use rustkey::led::{LED_GREEN, LED_OFF, LED_PURPLE, LED_YELLOW, set};
@@ -19,6 +16,7 @@ use rustkey::timer::sleep;
 use rustkey::touch::request;
 use rustkey::{blake2s, done, random, read_cdi};
 use x25519_dalek::{EphemeralSecret, PublicKey};
+use zeroize::Zeroize;
 
 // Entry point: zero all registers, init stack, zero BSS, call main.
 // Taken directly from the rusTkey README.
@@ -167,9 +165,9 @@ extern "C" fn main() -> ! {
         attempts += 1;
         //signal to host were ready for passphrase
         write_u8(ClientMessage::Ready4pass as u8);
-        let mut encrypted_host_hash = [0u8;32];
+        let mut encrypted_host_hash = [0u8; 32];
         read_into(&mut encrypted_host_hash);
-        let mut host_hash = [0u8;32];
+        let mut host_hash = [0u8; 32];
         cipher.apply_keystream_b2b(&encrypted_host_hash, &mut host_hash);
         let mut keyfile = [0u8; 32];
         let mut cdi = read_cdi();

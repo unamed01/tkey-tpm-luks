@@ -6,6 +6,7 @@
 use chacha20::cipher::stream::{StreamCipher, StreamCipherCoreWrapper};
 use chacha20::{ChaChaCore, R20, variants::Ietf};
 use host::{ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app};
+use std::error::Error;
 use std::io::Write;
 use std::process::ExitCode;
 use std::{
@@ -14,6 +15,17 @@ use std::{
 };
 use zeroize::{Zeroize, Zeroizing};
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
+    match run() {
+        Ok(t) => Ok(t),
+        Err(e) => {
+            eprintln!("ERR: {e}");
+            eprintln!("failed to enroll, please try again.");
+            eprintln!("open a issue, if this issue persists.");
+            Err(e)
+        }
+    }
+}
+fn run() -> Result<ExitCode, Box<dyn Error>> {
     let mut tkey = Tkey::new()?;
     //makes it easier rather than having to copy multiple files pretty nice QOL but its not perfect
     let bin = include_bytes!("../../../client/clientApp");
@@ -63,7 +75,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     tkey.read_exact(&mut encrypted_keyfile)?;
     let mut keyfile = [0u8; 32];
     cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
-    let current_passphrase = rpassword::prompt_password("input current luks Password.")?;
+    let current_passphrase = rpassword::prompt_password("input current luks Password>")?;
     stdin.write_all(&[current_passphrase.len() as u8])?;
     stdin.write_all(current_passphrase.as_bytes())?;
     stdin.write_all(&keyfile)?;
@@ -111,7 +123,7 @@ fn pass_enroll(
         eprintln!("ERR: failed to hash passphrase");
         eprintln!("this shouldn't happen, please report this issue.");
         eprintln!("{e}");
-        Err("{e}")?;
+        return Err("{e}".into());
     }
     cipher.apply_keystream(&mut hashed_pass);
     tkey.write_all(&hashed_pass)?;

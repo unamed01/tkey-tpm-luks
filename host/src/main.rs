@@ -94,8 +94,8 @@ fn ask_for_password(
         .output()?;
 
     let mut passphrase_bytes = pass.stdout;
-    let mut pass_len = passphrase_bytes.len();
-    if pass_len < 8 {
+    let mut actual_pass_len = passphrase_bytes.len() - 1;
+    if actual_pass_len < 8 {
         passphrase_bytes.zeroize();
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
@@ -103,7 +103,11 @@ fn ask_for_password(
     }
     let argon2 = get_argon2();
     let mut hashed_pass = [0u8; 32];
-    if let Err(e) = argon2.hash_password_into(&passphrase_bytes, host::SALT, &mut hashed_pass) {
+    if let Err(e) = argon2.hash_password_into(
+        &passphrase_bytes[..actual_pass_len],
+        host::SALT,
+        &mut hashed_pass,
+    ) {
         eprintln!("ERR: failed to hash passphrase");
         eprintln!("this shouldn't happen, please report this issue.");
         eprintln!("{e}");
@@ -112,7 +116,7 @@ fn ask_for_password(
     let mut encrypted_hashed_pass = [0u8; 32];
     cipher.apply_keystream_b2b(&hashed_pass, &mut encrypted_hashed_pass);
     tkey.write_all(&encrypted_hashed_pass)?;
-    pass_len.zeroize();
+    actual_pass_len.zeroize();
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
             println!("keyfile received sending onto cryptsetup for decryption");

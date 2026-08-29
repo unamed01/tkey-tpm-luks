@@ -347,8 +347,7 @@ pub fn get_key_seed() -> Result<[u8; 32], Box<dyn Error>> {
 
 //make sure argon2 is consistent accross files provides sane defaults.
 pub fn get_argon2() -> Argon2<'static> {
-    let params =
-        Params::new(131072 * 1024, 4, 4, None).expect("hardcoded argon2 params are wrong.");
+    let params = Params::new(131072, 4, 4, None).expect("hardcoded argon2 params are wrong.");
     Argon2::new(Algorithm::Argon2id, argon2::Version::V0x13, params)
 }
 

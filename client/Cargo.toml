@@ -10,7 +10,10 @@ p256 = { version = "0.14.0", default-features = false, features = [
   "ecdsa",
 ] }
 x25519-dalek = { version = "3.0.0", default-features = false }
-chacha20 = { version = "0.10.1", features = ["cipher", "rng"] }
+chacha20 = { version = "0.10.1", default-features = false, features = [
+  "cipher",
+  "rng",
+] }
 zeroize = { version = "1.9.0", default-features = false }
 [build-dependencies]
 p256 = { version = "0.14.0", default-features = false, features = [
