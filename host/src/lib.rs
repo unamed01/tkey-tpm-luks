@@ -346,8 +346,11 @@ pub fn get_key_seed() -> Result<[u8; 32], Box<dyn Error>> {
 }
 
 //make sure argon2 is consistent accross files provides sane defaults.
+//this would only slowdown bruteforcing in a scenario where an attacker successfully extracted CDI
+//from Tkey trough a vulnerability which is extremely unlikely so parameters are kept fast for
+//better UX.
 pub fn get_argon2() -> Argon2<'static> {
-    let params = Params::new(131072, 4, 4, None).expect("hardcoded argon2 params are wrong.");
+    let params = Params::new(13107, 1, 4, None).expect("hardcoded argon2 params are wrong.");
     Argon2::new(Algorithm::Argon2id, argon2::Version::V0x13, params)
 }
 
@@ -366,7 +369,7 @@ pub fn auth_with_tkey_and_tpm(
 
     let cipher = get_chacha20_cipher(&mut tkey)?;
 
-    let mut successful_auth = match verify_thread.join().map_err(|e| format!("err {e:?}"))? {
+    let mut trustworthy = match verify_thread.join().map_err(|e| format!("err {e:?}"))? {
         Ok(sig) => {
             tkey.write_all(&[HostMessage::TpmSigned as u8])?;
             tkey.write_all(&sig)?;
@@ -386,11 +389,11 @@ pub fn auth_with_tkey_and_tpm(
         Err(e @ (ClientError::InvalidSig | ClientError::MalformedSig | ClientError::BadPubkey)) => {
             eprintln!("{}", e);
             eprintln!("tkey FAILED to verify nonce signature, system is considered untrustworthy.");
-            successful_auth = false;
+            trustworthy = false;
         }
         _ => return Err(ClientError::OutOfsync)?,
     }
-    Ok((tkey, successful_auth, cipher))
+    Ok((tkey, trustworthy, cipher))
 }
 
 // loads client app onto tkey.

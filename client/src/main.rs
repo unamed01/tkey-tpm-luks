@@ -141,6 +141,7 @@ extern "C" fn main() -> ! {
             if !request(30, LED_PURPLE) {
                 panic!()
             }
+            set(LED_PURPLE);
         }
         // allows updates which change relevant PCR values and decryption on another clean system after tampering was detected
         // while trying its best to prevent social engineering attacks against a untrustworthy system
@@ -151,6 +152,7 @@ extern "C" fn main() -> ! {
             if !request(30, LED_YELLOW) {
                 panic!()
             }
+            set(LED_YELLOW);
         }
         Err(e) => {
             write_u8(e as u8);

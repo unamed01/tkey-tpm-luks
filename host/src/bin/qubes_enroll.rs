@@ -15,15 +15,20 @@ use std::{
 };
 use zeroize::{Zeroize, Zeroizing};
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    match run() {
-        Ok(t) => Ok(t),
+    let code = match run() {
+        Ok(t) => t,
         Err(e) => {
             eprintln!("ERR: {e}");
             eprintln!("failed to enroll, please try again.");
             eprintln!("open a issue, if this issue persists.");
-            Err(e)
+            return Err(e);
         }
-    }
+    };
+    println!("successfully enrolled keyslot with tkey reboot and everything should work!");
+    println!("press enter to exit");
+    let mut str = String::new();
+    std::io::stdin().read_line(&mut str)?;
+    Ok(code)
 }
 fn run() -> Result<ExitCode, Box<dyn Error>> {
     let mut tkey = Tkey::new()?;
