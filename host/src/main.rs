@@ -4,18 +4,19 @@
 // another warning is shown at systemd-ask-password (even though we can guarantee it since we
 // couldnt verify software running on host) this is vital to allow user to update kernel,xen or grub
 // which is extremely important
-use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, verify};
-use serialport::SerialPort;
+use chacha20::cipher::stream::StreamCipher;
+use host::{
+    ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status,
+    get_argon2,
+};
 use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
-use std::time::Duration;
 use std::{
     error::Error,
     io::Read,
     process::{Command, Stdio},
 };
-use tkeyclient::TKey;
 use zeroize::Zeroize;
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
@@ -26,66 +27,37 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         .status()?
         .success();
     if !mount {
-        println!("failed to mount");
-        return Ok(ExitCode::FAILURE);
+        Err("failed to mount, auto detection of boot device was wrong.")?;
     }
-    let bin = fs::read("/mnt/boot/client")?;
-    let mut tkey = TKey::connect(None)?;
-    tkey.load_app(bin.as_slice(), None)?;
-    drop(tkey);
-    let mut tkey = serialport::new("/dev/ttyACM0", 62500)
-        .timeout(Duration::from_secs(30))
-        .open()?;
-    let mut nonce = [0u8; 32];
-    tkey.read_exact(&mut nonce)?;
 
-    //if tpm hasn't signed
-    let mut trustworthy: bool = match verify(&nonce) {
-        Ok(sig) => {
-            tkey.write_all(&[HostMessage::TpmSigned as u8])?;
-            tkey.write_all(&sig)?;
-            true
+    let bin = fs::read("/mnt/boot/client")?;
+
+    let (mut tkey, trustworthy, mut cipher) = auth_with_tkey_and_tpm(bin)?;
+
+    //mirrors 3 tries client allows.
+    for tries in 1..=3 {
+        let status = check_status(&mut tkey);
+        //first thing clientapp should do is signal its ready 4 passphrase if it does not print the error and exit
+        if !matches!(status, Ok(ClientMessage::Ready4pass)) {
+            eprintln!("expected Ready4pass, but instead received :");
+            dbg!(&status);
+            Err(ClientError::OutOfsync)?
         }
-        Err(e) => {
-            eprintln!("{e}");
-            eprintln!("tpm REFUSED, to sign nonce");
-            tkey.write_all(&[HostErr::TpmRefusedToSign as u8])?;
-            false
-        }
-    };
-    match check_status(&mut *tkey) {
-        Ok(ClientMessage::GoodSig) => println!(
-            "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
-        ),
-        Err(e @ (ClientError::InvalidSig | ClientError::MalformedSig | ClientError::BadPubkey)) => {
-            eprintln!("{}", e);
-            eprintln!("tkey FAILED to verify nonce signature system is untrustworthy.");
-            trustworthy = false;
-        }
-        _ => return Err(ClientError::OutOfsync)?,
-    }
-    let trustworthy = trustworthy;
-    let mut tries = 0;
-    loop {
-        if tries >= 3 {
-            eprintln!("decryption failed too many attempts.");
-            return Ok(ExitCode::FAILURE);
-        }
-        tries += 1;
-        match check_status(&mut *tkey) {
-            Ok(ClientMessage::Ready4pass) => {}
-            Err(e) => return Err(e)?,
-            _ => return Err(ClientError::OutOfsync)?,
-        }
-        if let Err(e) = ask_for_password(&mut tkey, trustworthy) {
-            if matches!(e, ClientError::PassLen) {
-                println!("password length error, try again.");
+
+        if let Err(e) = ask_for_password(&mut tkey, trustworthy, &mut cipher) {
+            if matches!(e, ClientError::PassLen | ClientError::Blake2) {
+                let reason = if matches!(e, ClientError::PassLen) {
+                    "password length error"
+                } else {
+                    "blake2 error"
+                };
+                println!("{reason}, try again. {}/3 tries", tries);
                 continue;
             } else {
                 Err(e)?
             }
         }
-        match decrypt(&mut tkey) {
+        match decrypt(&mut tkey, &mut cipher) {
             Ok(_) => return Ok(ExitCode::SUCCESS),
             Err(e @ (HostErr::CryptsetupKilled | HostErr::CryptsetupErr)) => {
                 let reason = if matches!(e, HostErr::CryptsetupErr) {
@@ -98,44 +70,54 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             }
             Err(e) => {
                 println!("{e}");
-                return Err(e)?;
+                Err(e)?;
             }
         };
     }
+    println!("couldn't decrypted system, 3/3 tries exhausted.");
+    Ok(ExitCode::FAILURE)
 }
-fn ask_for_password(tkey: &mut Box<dyn SerialPort>, trustworthy: bool) -> Result<(), ClientError> {
-    //we cant control this warning will actually appear since
+fn ask_for_password(
+    tkey: &mut Tkey,
+    trustworthy: bool,
+    cipher: &mut host::ChaCha20Cipher,
+) -> Result<(), ClientError> {
+    //can't control whether the warning will appear if system hasn't been verified but might as well
+    //try to warn user twice (tkey already gates proceeding with touch)
     let prompt = if trustworthy {
         "input passphrase ALWAYS be sure tkey led is green before doing so."
     } else {
-        "TPM REFUSED TO UNSEAL, system might be tampered with. Input password at your own risk."
+        "tpm REFUSED to unseal, system might be tampered with. Input password at your own risk."
     };
     let pass = Command::new("/usr/bin/systemd-ask-password")
         .arg(prompt)
         .output()?;
+
     let mut passphrase_bytes = pass.stdout;
-    let mut passphrase = match String::try_from(passphrase_bytes.clone()) {
-        Ok(k) => k,
-        Err(e) => {
-            eprintln!("passphrase to utf-8 parse error: {e}");
-            String::from_utf8_lossy(&passphrase_bytes).to_string()
-        }
-    };
-    passphrase_bytes.zeroize();
-    let mut pass_len = passphrase.trim_end().len();
-    if pass_len > u8::MAX as usize || pass_len < 8 {
-        passphrase.zeroize();
+    let mut actual_pass_len = passphrase_bytes.len() - 1;
+    if actual_pass_len < 8 {
+        passphrase_bytes.zeroize();
         tkey.write_all(&[0u8])?;
-        _ = check_status(tkey.as_mut());
-        return Err(ClientError::PassLen);
+        _ = check_status(tkey);
+        Err(ClientError::PassLen)?;
     }
-    //writting password length to client
-    tkey.write_all(&[pass_len as u8])?;
-    //sending actual password to client
-    tkey.write_all(passphrase.trim_end().as_bytes())?;
-    passphrase.zeroize();
-    pass_len.zeroize();
-    match check_status(tkey.as_mut()) {
+    let argon2 = get_argon2();
+    let mut hashed_pass = [0u8; 32];
+    if let Err(e) = argon2.hash_password_into(
+        &passphrase_bytes[..actual_pass_len],
+        host::SALT,
+        &mut hashed_pass,
+    ) {
+        eprintln!("ERR: failed to hash passphrase");
+        eprintln!("this shouldn't happen, please report this issue.");
+        eprintln!("{e}");
+        return Err(ClientError::UnknownError);
+    }
+    let mut encrypted_hashed_pass = [0u8; 32];
+    cipher.apply_keystream_b2b(&hashed_pass, &mut encrypted_hashed_pass);
+    tkey.write_all(&encrypted_hashed_pass)?;
+    actual_pass_len.zeroize();
+    match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
             println!("keyfile received sending onto cryptsetup for decryption");
             Ok(())
@@ -145,7 +127,7 @@ fn ask_for_password(tkey: &mut Box<dyn SerialPort>, trustworthy: bool) -> Result
     }
 }
 
-fn decrypt(tkey: &mut Box<dyn SerialPort>) -> Result<(), HostErr> {
+fn decrypt(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), HostErr> {
     let args = &[
         "open",
         "--key-file",
@@ -169,14 +151,17 @@ fn decrypt(tkey: &mut Box<dyn SerialPort>) -> Result<(), HostErr> {
                 return Err(HostErr::PipeError);
             }
         };
+        cipher.apply_keystream(&mut keyfile);
         match stdin.write_all(&keyfile) {
             Ok(()) => keyfile.zeroize(),
             Err(e) => {
                 keyfile.zeroize();
+                tkey.write_all(&[HostErr::DecryptionError as u8])?;
                 Err(e)?
             }
         }
     }
+
     //extract status code (.code() should only fail if process is killed which is very unlikely)
     let status_code = match cryptsetup.wait()?.code() {
         Some(s) => s,

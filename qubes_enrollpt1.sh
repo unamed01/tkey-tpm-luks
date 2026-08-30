@@ -28,6 +28,14 @@ if ! qvm-run "$builder" 'test -d /home/user/tkey-tpm-luks '; then
   echo "please make sure you've cloned the repo AND checked the code in $builder"
   exit 4
 fi
+if ! qvm-run "$builder" 'test -f /home/user/tkey-tpm-luks/SALT'; then
+  qvm-run "$builder" 'head -c 32 /dev/urandom > /home/user/tkey-tpm-luks/SALT'
+fi
+
+#prevent cold build from always failing due to missing client binary
+if ! qvm-run "$builder" 'test -f /home/user/tkey-tpm-luks/client/clientApp'; then
+  qvm-run "$builder" 'head -c 8 /dev/urandom > /home/user/tkey-tpm-luks/client/clientApp'
+fi
 
 qvm-run -p "$builder" "cd /home/user/tkey-tpm-luks/host && bootdev=\"${bootD}\" luksdev=\"${luksD}\" luksUUID=\"${luksUUID}\" cargo build --release"
 mkdir -p dracut/

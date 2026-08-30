@@ -3,29 +3,41 @@
 //check qubes_guide.md for setup help you should still audit the code before doing so though
 //uses qrexec to talk to dom0 which owns tpm this will talk to verify bin enrollment should be done
 //inside an airgapped dispVM.
-use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status};
-use serialport::SerialPort;
+use chacha20::cipher::stream::{StreamCipher, StreamCipherCoreWrapper};
+use chacha20::{ChaChaCore, R20, variants::Ietf};
+use host::{ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app};
+use std::error::Error;
 use std::io::Write;
 use std::process::ExitCode;
 use std::{
     io::Read,
     process::{Command, Stdio},
-    time::Duration,
 };
-use tkeyclient::TKey;
 use zeroize::{Zeroize, Zeroizing};
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let mut tkey = TKey::connect(None)?;
+    let code = match run() {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("ERR: {e}");
+            eprintln!("failed to enroll, please try again.");
+            eprintln!("open a issue, if this issue persists.");
+            return Err(e);
+        }
+    };
+    println!("successfully enrolled keyslot with tkey reboot and everything should work!");
+    println!("press enter to exit");
+    let mut str = String::new();
+    std::io::stdin().read_line(&mut str)?;
+    Ok(code)
+}
+fn run() -> Result<ExitCode, Box<dyn Error>> {
+    let mut tkey = Tkey::new()?;
     //makes it easier rather than having to copy multiple files pretty nice QOL but its not perfect
     let bin = include_bytes!("../../../client/clientApp");
     if bin.len() < 1000 {
         panic!("did you recompile before passing onto dispVM?")
     }
-    tkey.load_app(bin, None)?;
-    drop(tkey);
-    let mut tkey = serialport::new("/dev/ttyACM0", 62500)
-        .timeout(Duration::from_secs(30))
-        .open()?;
+    load_app(&mut tkey, bin)?;
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
     let mut qrexec = Command::new("/usr/bin/qrexec-client-vm")
@@ -36,7 +48,8 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut stdin = qrexec.stdin.take().expect("failed to take qrexec stdin");
     let mut stdout = qrexec.stdout.take().expect("failed to take qrexec stdout");
     stdin.write_all(&nonce)?;
-    let mut b = [0u8; 1];
+    let mut cipher = host::get_chacha20_cipher(&mut tkey)?;
+    let mut b = [0u8];
     stdout.read_exact(&mut b)?;
     match HostMessage::try_from(b[0]) {
         Ok(HostMessage::TpmSigned) => {
@@ -52,7 +65,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         _ => Err(ClientError::OutOfsync)?,
     }
     // this makes sure tpm signature is fine (will wait until it is if its not)
-    match check_status(&mut *tkey) {
+    match check_status(&mut tkey) {
         Ok(ClientMessage::GoodSig) => println!(
             "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
         ),
@@ -62,10 +75,12 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Err(e) => Err(e)?,
     }
-    pass_enroll(&mut *tkey)?;
+    pass_enroll(&mut tkey, &mut cipher)?;
+    let mut encrypted_keyfile = [0u8; 32];
+    tkey.read_exact(&mut encrypted_keyfile)?;
     let mut keyfile = [0u8; 32];
-    tkey.read_exact(&mut keyfile)?;
-    let current_passphrase = rpassword::prompt_password("input current luks Password.")?;
+    cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
+    let current_passphrase = rpassword::prompt_password("input current luks Password>")?;
     stdin.write_all(&[current_passphrase.len() as u8])?;
     stdin.write_all(current_passphrase.as_bytes())?;
     stdin.write_all(&keyfile)?;
@@ -80,7 +95,10 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Ok(ExitCode::FAILURE)
     }
 }
-fn pass_enroll(tkey: &mut dyn SerialPort) -> Result<(), Box<dyn std::error::Error>> {
+fn pass_enroll(
+    tkey: &mut Tkey,
+    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     match check_status(tkey) {
         Ok(ClientMessage::Ready4pass) => {}
         Err(e) => Err(e)?,
@@ -96,7 +114,7 @@ fn pass_enroll(tkey: &mut dyn SerialPort) -> Result<(), Box<dyn std::error::Erro
         println!("passwords DID NOT match, try again.");
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
-        pass_enroll(tkey)?;
+        pass_enroll(tkey, cipher)?;
         return Ok(());
     };
     let mut pass_len = pass1.trim_end().len();
@@ -104,11 +122,20 @@ fn pass_enroll(tkey: &mut dyn SerialPort) -> Result<(), Box<dyn std::error::Erro
         pass_len.zeroize();
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
-        Err(ClientError::PassLen)?;
+        pass_enroll(tkey, cipher)?;
+        return Ok(());
     }
-    tkey.write_all(&[pass_len as u8])?;
-    pass_len.zeroize();
-    tkey.write_all(pass1.trim_end().as_bytes())?;
+    let argon2 = host::get_argon2();
+    let mut hashed_pass = [0u8; 32];
+    if let Err(e) = argon2.hash_password_into(pass1.as_bytes(), host::SALT, &mut hashed_pass) {
+        eprintln!("ERR: failed to hash passphrase");
+        eprintln!("this shouldn't happen, please report this issue.");
+        eprintln!("{e}");
+        return Err("{e}".into());
+    }
+    cipher.apply_keystream(&mut hashed_pass);
+    tkey.write_all(&hashed_pass)?;
+    hashed_pass.zeroize();
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
             println!("keyfile received sending onto cryptsetup for decryption");

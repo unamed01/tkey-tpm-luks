@@ -1,51 +1,48 @@
 //enrollment works by doing exactly what we'd do at runtime with less eror handling we want to make
 //sure we give host a somewhat known good state
-use host::{ClientError, ClientMessage, HostErr, HostMessage, check_status, verify};
-use serialport::SerialPort;
+use chacha20::cipher::stream::StreamCipher;
+use host::{
+    ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status,
+};
 use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
 use std::{
     io::Read,
     process::{Command, Stdio},
-    time::Duration,
 };
-use tkeyclient::TKey;
 use zeroize::{Zeroize, Zeroizing};
 //this goes trough the exact same process as it would in initramfs but instead piping into
 //cryptsetup to enroll a keyslot
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let mut tkey = TKey::connect(None)?;
-    let bin = fs::read("../../../client/clientApp")?;
+    let bin = fs::read("../../client/clientApp")?;
     if bin.len() < 1000 {
-        panic!("did you recompile before trying to enroll?")
+        panic!("ERR: bad tkey binary,did you recompile before trying to enroll?")
     }
-    tkey.load_app(bin.as_slice(), None)?;
-    drop(tkey);
-    let mut tkey = serialport::new("/dev/ttyACM0", 62500)
-        .timeout(Duration::from_secs(30))
-        .open()?;
-    let mut nonce = [0u8; 32];
-    tkey.read_exact(&mut nonce)?;
-    let sig_bytes = verify(&nonce)?;
-    tkey.write_all(&sig_bytes)?;
+    let (mut tkey, trustworthy, mut cipher) = auth_with_tkey_and_tpm(bin)?;
+    if !trustworthy {
+        println!("failed to auth with tpm.")
+    }
 
     // this makes sure tpm signature is fine (will wait until it is if its not)
-    match check_status(&mut *tkey) {
+    match check_status(&mut tkey) {
         Ok(ClientMessage::GoodSig) => println!(
             "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
         ),
         Err(ClientError::InvalidSig) => println!("sig is invalid should only happen if updating."),
         _ => return Err("host and tkey are out of sync restart the app")?,
     }
-    pass_enroll(&mut *tkey)?;
-    match enroll(&mut tkey) {
+    pass_enroll(&mut tkey, &mut cipher)?;
+    match enroll(&mut tkey, &mut cipher) {
         Ok(_) => Ok(ExitCode::SUCCESS),
         Err(HostErr::CryptsetupErr) => Ok(ExitCode::FAILURE),
         Err(e) => return Err(e)?,
     }
 }
-fn pass_enroll(tkey: &mut dyn SerialPort) -> Result<(), Box<dyn std::error::Error>> {
+fn pass_enroll(
+    tkey: &mut Tkey,
+    cipher: &mut host::ChaCha20Cipher,
+) -> Result<(), Box<dyn std::error::Error>> {
     match check_status(tkey) {
         Ok(ClientMessage::Ready4pass) => {}
         Err(e) => Err(e)?,
@@ -55,24 +52,32 @@ fn pass_enroll(tkey: &mut dyn SerialPort) -> Result<(), Box<dyn std::error::Erro
         "enrolling passphrase now,you'll need to type this in exactly everytime to unlock your disk. (wont be echoed)"
     );
     let pass1: Zeroizing<String> = rpassword::prompt_password(">")?.into();
-    println!("type in again for confirmation.");
+    println!("type password in again for confirmation.");
     let pass2: Zeroizing<String> = rpassword::prompt_password(">")?.into();
     if pass1 != pass2 {
         println!("passwords DID NOT match, try again.");
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
-        pass_enroll(tkey)?;
+        pass_enroll(tkey, cipher)?;
         return Ok(());
     };
     let mut pass_len = pass1.len();
-    if pass_len > u8::MAX as usize {
+    if pass_len < 8 {
         pass_len.zeroize();
         tkey.write_all(&[0u8])?;
         _ = check_status(tkey);
         Err(ClientError::PassLen)?;
     }
-    tkey.write_all(&[pass_len as u8])?;
-    tkey.write_all(pass1.as_bytes())?;
+    let argon2 = host::get_argon2();
+    let mut password_hash = [0u8; 32];
+    if let Err(e) = argon2.hash_password_into(pass1.as_bytes(), host::SALT, &mut password_hash) {
+        eprintln!("ERR: failed to hash passphrase");
+        eprintln!("this shouldn't happen, please report this issue.");
+        eprintln!("{e}");
+        Err("{e}")?;
+    }
+    cipher.apply_keystream(&mut password_hash);
+    tkey.write_all(&password_hash)?;
     pass_len.zeroize();
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
@@ -83,7 +88,7 @@ fn pass_enroll(tkey: &mut dyn SerialPort) -> Result<(), Box<dyn std::error::Erro
         _ => Err(ClientError::OutOfsync)?,
     }
 }
-fn enroll(tkey: &mut Box<dyn SerialPort>) -> Result<(), HostErr> {
+fn enroll(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), HostErr> {
     println!("to enroll you must type in your currently enrolled passphrase (won't be echoed)");
     let current_pass = rpassword::prompt_password(">")?;
     let current_pass_len = current_pass.len().to_string();
@@ -109,7 +114,10 @@ fn enroll(tkey: &mut Box<dyn SerialPort>) -> Result<(), HostErr> {
     };
     stdin.write_all(current_pass.as_bytes())?;
     {
+        let mut encrypted_keyfile = [0u8; 32];
         let mut keyfile = [0u8; 32];
+        cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
+        encrypted_keyfile.zeroize();
         tkey.read_exact(&mut keyfile)?;
         stdin.write_all(&keyfile)?;
         keyfile.zeroize();

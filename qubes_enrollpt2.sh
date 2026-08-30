@@ -13,21 +13,25 @@ luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
 luksD="/dev/nvme0n1p3" #change here if you didn't use auto partitioning.
 # if you change this make sure to also change last command to make sure it can execute the bin directly like xfce4-terminal can.
 enroll_term="xfce4-terminal"
+usb="$(qvm-usb list | grep 'Tillitis' | awk '{print $1}')"
+if test -z "$usb"; then
+  echo Tkey not plugged in, must be plugged in for enrollment.
+  exit 1
+fi
 mkdir -p ~/tkey-files && cd ~/tkey-files #make sure were on the right dir
-
 #cleanup policy on exit
 trap 'rm -f /etc/qubes/policy.d/20-tkey-tpm-luks.policy' EXIT
 
 if ! test -f enroll.sh; then
   echo ERROR: enroll.sh couldn\'t be found.
-  echo make sure to also bring enroll.sh to dom0 to enroll PCRs onto tpm.
-  echo this is most likely a bug since part1 should\'ve brought it to dom0 open a github issue if applicable.
+  echo make sure to bring enroll.sh to dom0 to enroll PCRs onto tpm.
+  echo this is likely a bug since qubes_enrollpt1.sh should\'ve brought it to dom0. open a github issue if applicable.
   exit 3
 fi
 
-bash enroll.sh # actually enroll onto tpm with tpm2-tools.
+bash enroll.sh
 
-if ! qvm-prefs "$disp_name"; then
+if ! qvm-prefs "$disp_name" &>/dev/null; then
   qvm-create --class DispVM --label red --property netvm='' -t "$disp_template" "$disp_name"
 else
   qvm-kill "$disp_name" || true
@@ -54,6 +58,5 @@ if ! qvm-run "$disp_name" command -v "$enroll_term"; then
   echo must have "$enroll_term" to run
   exit 2
 fi
-usb="$(qvm-usb list | grep 'Tillitis' | awk '{print $1}')"
 qvm-usb attach "$disp_name" "$usb"
 qvm-run -u root "$disp_name" "$enroll_term" -x /home/user/QubesIncoming/$builder/qubes_enroll

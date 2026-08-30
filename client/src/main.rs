@@ -5,16 +5,18 @@
 // intentionally outside of measured PCR values this is fine since cdi =
 // blake2s(uds + blake2s(app_bytes)) so if this app ever changes even correct passphrase cant unlock
 // disk.
+use chacha20::cipher::StreamCipher;
+use chacha20::rand_core::SeedableRng;
+use chacha20::{ChaCha20, ChaCha20Rng, KeyIvInit};
 use core::arch::global_asm;
-use core::ptr;
-use core::sync::atomic::{self, Ordering};
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
-use p256::pkcs8::DecodePublicKey;
 use rustkey::io::{read_into, write_u8};
 use rustkey::led::{LED_GREEN, LED_OFF, LED_PURPLE, LED_YELLOW, set};
 use rustkey::timer::sleep;
 use rustkey::touch::request;
 use rustkey::{blake2s, done, random, read_cdi};
+use x25519_dalek::{EphemeralSecret, PublicKey};
+use zeroize::Zeroize;
 
 // Entry point: zero all registers, init stack, zero BSS, call main.
 // Taken directly from the rusTkey README.
@@ -71,7 +73,6 @@ pub enum HostMessage {
     DecryptionSuccess = 0x99,
     DecryptionError = 0x98,
     TpmSigned = 0x97,
-    //only error here
     TpmRefusedToSign = 0x90,
 }
 
@@ -90,18 +91,48 @@ pub enum ClientError {
     InvalidSig = 0x13,
     BadPubkey = 0x14,
     IOError = 0x15,
-    TpmRefused,
+    ChaChaInit = 0x16,
     UnknownError,
+    //same thing as InvalidSig since we don't trust host any further if TPM let us know that it
+    //can't give us signed nonce than if it actually gave us invalid signed nonce, therefore both
+    //are treated the same.
+    TpmRefusedToSign,
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(_: &core::panic::PanicInfo) -> ! {
     rustkey::abort()
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn main() -> ! {
-    match verify_sig() {
+    let mut nonce = [0u8; 32];
+    random(&mut nonce, b"");
+    write_u8_slice(&nonce);
+    let mut encryption_nonce = [0u8; 12];
+    random(&mut encryption_nonce, b"");
+    write_u8_slice(&encryption_nonce);
+    let mut seed = [0u8; 32];
+    let mut cdi = read_cdi();
+    if blake2s(&mut seed, &cdi, b"nI2jlrOM9nlCnWXY/BpR0qe1Al4IltMz%").is_err() {
+        cdi.zeroize();
+        write_u8(ClientError::Blake2 as u8);
+        rustkey::abort()
+    }
+    let mut rng = ChaCha20Rng::from_seed(seed);
+    cdi.zeroize();
+    seed.zeroize();
+    let tkey_secret = EphemeralSecret::random_from_rng(&mut rng);
+    let tkey_public = PublicKey::from(&tkey_secret);
+    write_u8_slice(tkey_public.as_bytes());
+    let mut host_public_bytes = [0u8; 32];
+    read_into(&mut host_public_bytes);
+    let host_public = PublicKey::from(host_public_bytes);
+    let ss = tkey_secret.diffie_hellman(&host_public);
+    let mut cipher = ChaCha20::new_from_slices(ss.as_bytes(), &encryption_nonce)
+        .map_err(|_| write_u8(ClientError::ChaChaInit as u8))
+        .unwrap();
+    match verify_sig(nonce) {
         Ok(_) => set(LED_GREEN),
         //this is shouldn't happen unless user renerolled to new PCR values before updating client app
         //should be way more caitious when you see purple vs yellow host might be trying to give a bad signature or replay an old one
@@ -110,15 +141,22 @@ extern "C" fn main() -> ! {
             if !request(30, LED_PURPLE) {
                 panic!()
             }
+            set(LED_PURPLE);
         }
         // allows updates which change relevant PCR values and decryption on another clean system after tampering was detected
         // while trying its best to prevent social engineering attacks against a untrustworthy system
         // yellow LED is choosen to make it easily distinguishable from a panic which flashes red
-        Err(ClientError::TpmRefused) => {
-            write_u8(ClientError::TpmRefused as u8);
+        Err(ClientError::TpmRefusedToSign) => {
+            //send the byte same, no point in  treating either one differently
+            write_u8(ClientError::InvalidSig as u8);
             if !request(30, LED_YELLOW) {
                 panic!()
             }
+            set(LED_YELLOW);
+        }
+        Err(e) => {
+            write_u8(e as u8);
+            panic!()
         }
         Err(e) => {
             write_u8(e as u8);
@@ -133,36 +171,28 @@ extern "C" fn main() -> ! {
         attempts += 1;
         //signal to host were ready for passphrase
         write_u8(ClientMessage::Ready4pass as u8);
-        let mut len_buf = [0u8; 1];
-        read_into(&mut len_buf);
-        let pass_len: u8 = len_buf[0];
-        if pass_len < 8 {
-            write_u8(ClientError::PassLen as u8);
-            let mut drain = [0u8; 256];
-            read_into(&mut drain[..pass_len as usize]);
-            sleep(3);
-            continue;
-        };
-        let mut passphrase = [0u8; 256];
-        read_into(&mut passphrase[..pass_len as usize]);
+        let mut encrypted_host_hash = [0u8; 32];
+        read_into(&mut encrypted_host_hash);
+        let mut host_hash = [0u8; 32];
+        cipher.apply_keystream_b2b(&encrypted_host_hash, &mut host_hash);
         let mut keyfile = [0u8; 32];
         let mut cdi = read_cdi();
-        match blake2s(&mut keyfile, &cdi, &passphrase[..pass_len as usize]) {
-            Ok(_) => {}
-            Err(_) => {
-                zeroize(&mut cdi);
-                zeroize(&mut passphrase);
-                zeroize(&mut keyfile);
-                write_u8(ClientError::Blake2 as u8);
-                sleep(3);
-                continue;
-            }
+        if blake2s(&mut keyfile, &cdi, &host_hash).is_err() {
+            cdi.zeroize();
+            host_hash.zeroize();
+            keyfile.zeroize();
+            write_u8(ClientError::Blake2 as u8);
+            sleep(3);
+            continue;
         }
-        zeroize(&mut passphrase);
+        host_hash.zeroize();
+        let mut encrypted_keyfile = [0u8; 32];
+        cipher.apply_keystream_b2b(&keyfile, &mut encrypted_keyfile);
+        keyfile.zeroize();
         write_u8(ClientMessage::GoodPass as u8);
-        write_u8_slice(&keyfile);
-        zeroize(&mut keyfile);
-        zeroize(&mut cdi);
+        write_u8_slice(&encrypted_keyfile);
+        encrypted_keyfile.zeroize();
+        cdi.zeroize();
         let mut success = [0u8; 1];
         read_into(&mut success);
         if success[0] == HostMessage::DecryptionSuccess as u8 {
@@ -176,13 +206,11 @@ extern "C" fn main() -> ! {
     done()
 }
 
-fn verify_sig() -> Result<(), ClientError> {
+fn verify_sig(nonce: [u8; 32]) -> Result<(), ClientError> {
     //shouldnt fail since we've checked pubkey at compile time
-    let tpm_pubkey = VerifyingKey::from_public_key_der(include_bytes!("../../tpm_pubkey_raw.bin"))
-        .map_err(|_| ClientError::BadPubkey)?;
-    let mut nonce = [0u8; 32];
-    random(&mut nonce, b"");
-    write_u8_slice(&nonce);
+    let key_bytes: &[u8; 91] = include_bytes!("../../tpm_pubkey_raw.bin");
+    let tpm_pubkey =
+        VerifyingKey::from_sec1_bytes(&key_bytes[26..91]).map_err(|_| ClientError::BadPubkey)?;
     let mut status = [0u8; 1];
     read_into(&mut status);
     if status[0] == HostMessage::TpmSigned as u8 {
@@ -195,7 +223,7 @@ fn verify_sig() -> Result<(), ClientError> {
         write_u8(ClientMessage::GoodSig as u8);
         Ok(())
     } else {
-        Err(ClientError::TpmRefused)
+        Err(ClientError::TpmRefusedToSign)
     }
 }
 
@@ -204,11 +232,4 @@ fn write_u8_slice(slice: &[u8]) {
     for b in slice.iter() {
         write_u8(*b);
     }
-}
-//"custom" zeroize func since zeroize requires global alloc. this is functionally equivalent to .zeroize()
-fn zeroize(buf: &mut [u8]) {
-    for byte in buf.iter_mut() {
-        unsafe { ptr::write_volatile(byte, 0) };
-    }
-    atomic::compiler_fence(Ordering::SeqCst);
 }
