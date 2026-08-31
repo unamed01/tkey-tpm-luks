@@ -158,10 +158,6 @@ extern "C" fn main() -> ! {
             write_u8(e as u8);
             panic!()
         }
-        Err(e) => {
-            write_u8(e as u8);
-            panic!()
-        }
     }
     let mut attempts = 0;
     loop {

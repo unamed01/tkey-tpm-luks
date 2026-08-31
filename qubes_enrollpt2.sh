@@ -13,7 +13,7 @@ luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
 luksD="/dev/nvme0n1p3" #change here if you didn't use auto partitioning.
 # if you change this make sure to also change last command to make sure it can execute the bin directly like xfce4-terminal can.
 enroll_term="xfce4-terminal"
-usb="$(qvm-usb list | grep 'Tillitis' | awk '{print $1}')"
+usb="$(qvm-usb list | grep 'Tillitis' | awk '{print $1}')" || true
 if test -z "$usb"; then
   echo Tkey not plugged in, must be plugged in for enrollment.
   exit 1

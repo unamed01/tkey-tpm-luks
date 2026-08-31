@@ -65,6 +65,13 @@ fi
 # Backup first
 test -f /boot/efi/EFI/BOOT/BOOTX64.EFI.bak || cp /boot/efi/EFI/BOOT/BOOTX64.EFI /boot/efi/EFI/BOOT/BOOTX64.EFI.bak
 test -f /boot/efi/EFI/qubes/grubx64.efi.bak || cp /boot/efi/EFI/qubes/grubx64.efi /boot/efi/EFI/qubes/grubx64.efi.bak
+#ensure deterministic PCR 8,9 generation (see issue below)
+#https://github.com/fedora-silverblue/issue-tracker/issues/285
+systemctl --global mask grub-boot-success.timer
+systemctl --global mask grub-boot-success.service
+systemctl --global mask grub-boot-indeterminate.service
+chmod -x /etc/grub.d/10_reset_boot_success || true
+chmod -x /etc/grub.d/08_fallback_counting || true
 #modules from https://github.com/QubesOS/qubes-grub2/blob/00e34f13235d39f81fa0130500db43aa803c8a60/grub2.spec.in#L441 which are default.
 # this is needed since by default qubes' grub doesnt have the tpm module so this is needed to make sure PCRs 8,9 arent 0s.
 grub2-mkimage \
