@@ -17,7 +17,7 @@ tkey-tpm-luks is hardware aware, whats the point in locking down boot process if
 ```
   TKey              Host              TPM
     |                 |                 |
-    | 1  move nonce |                 |
+    | 1  move nonce   |                 |
     |----------------------------------->
     |                 |                 |
     |                 |                 +-+ 2  checks PCRs,
