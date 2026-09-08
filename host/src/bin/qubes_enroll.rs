@@ -112,16 +112,12 @@ fn pass_enroll(
     let pass2: Zeroizing<String> = rpassword::prompt_password(">")?.into();
     if pass1 != pass2 {
         println!("passwords DID NOT match, try again.");
-        tkey.write_all(&[0u8])?;
-        _ = check_status(tkey);
         pass_enroll(tkey, cipher)?;
         return Ok(());
     };
     let mut pass_len = pass1.trim_end().len();
     if pass_len > u8::MAX as usize || pass_len < 8 {
         pass_len.zeroize();
-        tkey.write_all(&[0u8])?;
-        _ = check_status(tkey);
         pass_enroll(tkey, cipher)?;
         return Ok(());
     }

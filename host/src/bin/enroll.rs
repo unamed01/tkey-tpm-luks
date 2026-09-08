@@ -56,17 +56,14 @@ fn pass_enroll(
     let pass2: Zeroizing<String> = rpassword::prompt_password(">")?.into();
     if pass1 != pass2 {
         println!("passwords DID NOT match, try again.");
-        tkey.write_all(&[0u8])?;
-        _ = check_status(tkey);
         pass_enroll(tkey, cipher)?;
         return Ok(());
     };
     let mut pass_len = pass1.len();
     if pass_len < 8 {
         pass_len.zeroize();
-        tkey.write_all(&[0u8])?;
-        _ = check_status(tkey);
-        Err(ClientError::PassLen)?;
+        pass_enroll(tkey, cipher)?;
+        return Ok(());
     }
     let argon2 = host::get_argon2();
     let mut password_hash = [0u8; 32];
@@ -115,10 +112,10 @@ fn enroll(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), Host
     stdin.write_all(current_pass.as_bytes())?;
     {
         let mut encrypted_keyfile = [0u8; 32];
+        tkey.read_exact(&mut encrypted_keyfile);
         let mut keyfile = [0u8; 32];
         cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
         encrypted_keyfile.zeroize();
-        tkey.read_exact(&mut keyfile)?;
         stdin.write_all(&keyfile)?;
         keyfile.zeroize();
     }
