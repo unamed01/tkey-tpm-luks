@@ -1,11 +1,5 @@
-#!/usr/bin/env bash
-# Creates a P-256 ECDSA signing key in the TPM sealed to PCR policy,
-#
-# Usage: enrollment.sh
-#
-# Env overrides:
-#   TPM_HANDLE  persistent handle    (default: 0x81000001)
-#   PUBKEY_OUT  output path          (default: ./tpm_pubkey_raw.bin)
+#!/usr/bin/env bash --
+# Creates a P-256 ECDSA signing key in the TPM, and exports pubkey
 
 set -euo pipefail
 
@@ -32,18 +26,8 @@ preflight() {
   [[ $EUID -eq 0 ]] || die "must run as root"
 
   if tpm2_pcrread "${PCR_BANK}:${PCR_LIST}" | grep --color '0000000000000000000000000000000000000000000000000000000000000000'; then
-    die "one of the PCRs are blank make sure your grub is measuring PCRs correctly "
+    die "one of the PCRs are blank make sure your grub is measuring PCRs."
   fi
-
-  echo "Current PCR values being sealed to (${PCR_BANK}:${PCR_LIST}):"
-  tpm2_pcrread "${PCR_BANK}:${PCR_LIST}"
-  echo
-  echo "  These values must match at EVERY unlock"
-  echo "  Re-enrollment required after firmware, kernel, or GRUB updates (which would require a recompiling and renrolling client)"
-  echo "  you should probably update your grub kernel before doing this.."
-  echo
-  read -rp "  Are you sure? [y/N] " ans
-  [[ "$ans" =~ ^[Yy]$ ]] || die "aborted"
 }
 
 tpm_create_key() {
@@ -53,23 +37,20 @@ tpm_create_key() {
     read -rp "Evict and re-create? This invalidates any existing enrollment [y/N] " ans
     [[ "$ans" =~ ^[Yy]$ ]] || die "aborted"
     tpm2_evictcontrol -C o -c "${TPM_HANDLE}"
-    echo "Evicted handle"
+    echo "Evicted handle."
   fi
 
-  echo "Creating primary key (owner hierarchy).."
   tpm2_createprimary \
     -C o \
     -G ecc256 \
     -g sha256 \
-    -c "${WORK}/primary.ctx"
+    -c "${WORK}/primary.ctx" >/dev/null
 
-  echo "Building PCR policy.."
   tpm2_createpolicy \
     --policy-pcr \
     -l "${PCR_BANK}:${PCR_LIST}" \
-    -L "${WORK}/pcr_policy.bin"
+    -L "${WORK}/pcr_policy.bin" >/dev/null
 
-  echo "Creating signing key.."
   tpm2_create \
     -C "${WORK}/primary.ctx" \
     -G "ecc256:ecdsa-sha256" \
@@ -77,19 +58,18 @@ tpm_create_key() {
     -r "${WORK}/sign.priv" \
     -u "${WORK}/sign.pub" \
     -L "${WORK}/pcr_policy.bin" \
-    -a "sign|fixedtpm|fixedparent|sensitivedataorigin"
+    -a "sign|fixedtpm|fixedparent|sensitivedataorigin" >/dev/null
 
-  echo "Loading and persisting signing key at ${TPM_HANDLE}.."
   tpm2_load \
     -C "${WORK}/primary.ctx" \
     -r "${WORK}/sign.priv" \
     -u "${WORK}/sign.pub" \
-    -c "${WORK}/sign.ctx"
+    -c "${WORK}/sign.ctx" >/dev/null
 
   tpm2_evictcontrol \
     -C o \
     -c "${WORK}/sign.ctx" \
-    "${TPM_HANDLE}"
+    "${TPM_HANDLE}" >/dev/null
 
   tpm2_flushcontext -t 2>/dev/null || true
 
@@ -107,19 +87,6 @@ export_pubkey() {
   echo "Public key written to ${PUBKEY_OUT}."
 }
 
-main() {
-  echo "╔══════════════════════════════════════════════╗"
-  echo "║  TKey FDE — TPM Key Enrollment               ║"
-  echo "╠══════════════════════════════════════════════╣"
-  printf "║  PCRs   : %-34s║\n" "${PCR_BANK}:${PCR_LIST}"
-  printf "║  Handle : %-34s║\n" "${TPM_HANDLE}"
-  printf "║  Output : %-34s║\n" "${PUBKEY_OUT}"
-  echo "╚══════════════════════════════════════════════╝"
-  echo
-
-  preflight
-  tpm_create_key
-  export_pubkey
-}
-
-main
+preflight
+tpm_create_key
+export_pubkey

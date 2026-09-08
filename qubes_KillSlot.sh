@@ -1,0 +1,52 @@
+#!/bin/bash
+set -euo pipefail
+
+if [[ "$EUID" != "0" ]]; then
+  echo must run as root
+  exit 1
+fi
+read -rp "this will FULLY delete keyslot $1, are you sure [Y/n]" ans
+[[ "$ans" =~ ^[Yy]$ ]] || {
+  echo refused
+  exit 1
+}
+disp_template=$(qubes-prefs default_dispvm)
+disp_name="tkey-enroll"
+builder="tkey-builder" #change this if your vm name is different..
+bootD="$(findmnt -no SOURCE /boot)"
+luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
+luksD="/dev/nvme0n1p3" #change here if you didn't use auto partitioning.
+# if you change this make sure to also change last command to make sure it can execute the bin directly like xfce4-terminal can.
+enroll_term="xfce4-terminal"
+
+if ! qvm-prefs "$disp_name" &>/dev/null; then
+  qvm-create --class DispVM --label red --property netvm='' -t "$disp_template" "$disp_name"
+else
+  qvm-kill "$disp_name" || true
+  qvm-start "$disp_name" &
+fi
+
+if ! qvm-run "$disp_name" command -v "$enroll_term"; then
+  echo "$disp_name" doesn\'t have "$enroll_term"
+  echo must have "$enroll_term" to run
+  exit 2
+fi
+
+usb="$(qvm-usb list | grep 'Tillitis' | awk '{print $1}')" || true
+if test -z "$usb"; then
+  echo Tkey not plugged in, must be plugged in for this process.
+  exit 1
+fi
+cd ~/tkey-files #make sure were on the right dir
+#cleanup policy on exit
+trap 'rm -f /etc/qubes/policy.d/20-tkey-tpm-luks.policy' EXIT
+
+echo "type to to copy to $disp_name (copying qubes_enroll)"
+notify-send "qubes_enrollpt2" "type to to copy to $disp_name (copying qubes_enroll)"
+qvm-run -p "$builder" "cd /home/user/tkey-tpm-luks/host && bootdev=\"${bootD}\" luksdev=\"${luksD}\" luksUUID=\"${luksUUID}\" cargo build --release && qvm-copy target/release/qubes_enroll"
+#allow disp to run verify bin with qrexec svc we setup in part1
+cat >/etc/qubes/policy.d/20-tkey-tpm-luks.policy <<EOF
+qubes.LuksKillSlot * $disp_name dom0 allow
+EOF
+qvm-usb attach "$disp_name" "$usb"
+qvm-run -u root "$disp_name" "$enroll_term" -x "/home/user/QubesIncoming/$builder/qubes_enroll --kill-slot $1"

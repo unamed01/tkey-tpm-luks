@@ -1,6 +1,6 @@
-//verify.rs
+//kill-slot
 use host::{HostErr, HostMessage, verify};
-use std::fs;
+use std::fs::{self, File};
 use std::process::ExitCode;
 use std::process::{Command, Stdio};
 use std::{
@@ -13,7 +13,11 @@ use zeroize::Zeroizing;
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut nonce = [0u8; 32];
     std::io::stdin().read_exact(&mut nonce)?;
-    let mut f = fs::File::create("/root/tkey-files/verify.log")?;
+    let mut f = fs::OpenOptions::new()
+        .append(true)
+        .write(true)
+        .create(true)
+        .open("/root/tkey-files/Qubes_Kill_slot.rs")?;
     match verify(&nonce) {
         Ok(s) => {
             stdout().write_all(&[HostMessage::TpmSigned as u8])?;
@@ -31,42 +35,26 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
             stdout().flush()?;
         }
     };
-    enroll()?;
-    writeln!(f, "success!")?;
+    kill_slot()?;
+    writeln!(f, "successfully wiped old luks slot..")?;
     Ok(ExitCode::SUCCESS)
 }
 
-fn enroll() -> Result<(), HostErr> {
-    //this below makes sure that we can realiably write the correct passphrase onto cryptsetup for
-    //decryption using stdin only.
-    let mut current_pass_bytes: Zeroizing<[u8; 256]> = [0u8; 256].into();
-    let mut current_pass_bytes_len: Zeroizing<[u8; 1]> = [0u8; 1].into();
-    stdin().read_exact(&mut *current_pass_bytes_len)?;
-    stdin().read_exact(&mut current_pass_bytes[..current_pass_bytes_len[0] as usize])?;
-
-    let current_pass: Zeroizing<String> = match String::from_utf8(
-        current_pass_bytes[..current_pass_bytes_len[0] as usize].to_vec(),
-    ) {
-        Ok(k) => k,
-        Err(_) => Err(HostErr::StringParseError)?,
-    }
-    .into();
-    let current_pass_len: Zeroizing<String> = current_pass.len().to_string().into();
-
+fn kill_slot() -> Result<(), HostErr> {
+    let mut keyslot = [0u8; 1];
+    stdin().read_exact(&mut keyslot)?;
     let args = &[
-        "luksAddKey",
-        host::ENCRYPTEDDISK,
-        "--batch-mode",
+        "luksKillSlot",
         "--key-file=-",
-        "--keyfile-size",
-        &current_pass_len,
-        "--new-keyfile=-",
-        "--new-keyfile-size=32",
-        "--iter-time=1", // keyfile is random no point in a lots of iterations
+        "--keyfile-size=32",
+        host::ENCRYPTEDDISK,
+        &keyslot[0].to_string(),
     ];
     let mut cryptsetup = Command::new("/usr/sbin/cryptsetup")
         .args(args)
         .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()?;
     let mut stdin = match cryptsetup.stdin.take() {
         Some(stdin) => stdin,
@@ -74,9 +62,6 @@ fn enroll() -> Result<(), HostErr> {
             return Err(HostErr::PipeError);
         }
     };
-    //writes current passphrase
-    stdin.write_all(current_pass.as_bytes())?;
-    //takes keyfile from tkey from vm then sends over to cryptsetup
     {
         let mut keyfile: Zeroizing<[u8; 32]> = [0u8; 32].into();
         io::stdin().read_exact(&mut *keyfile)?;

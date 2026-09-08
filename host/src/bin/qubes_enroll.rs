@@ -1,12 +1,13 @@
 // qubes_enroll.rs
 //enrollment for qubesOS tested with qubes version 4.3.1
-//check qubes_guide.md for setup help you should still audit the code before doing so though
-//uses qrexec to talk to dom0 which owns tpm this will talk to verify bin enrollment should be done
-//inside an airgapped dispVM.
+//check README.md for setup help you should still audit the code before doing so though
+//uses qrexec to talk to dom0 which owns tpm this will talk to verify bin.
+//enrollment should be done inside an airgapped dispVM.
 use chacha20::cipher::stream::{StreamCipher, StreamCipherCoreWrapper};
 use chacha20::{ChaChaCore, R20, variants::Ietf};
 use host::{ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app};
 use std::error::Error;
+use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
 use std::{
@@ -19,32 +20,56 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Ok(t) => t,
         Err(e) => {
             eprintln!("ERR: {e}");
-            eprintln!("failed to enroll, please try again.");
+            eprintln!("\nfailed to enroll, please try again.");
             eprintln!("open a issue, if this issue persists.");
+            println!("press enter to exit.");
+            let mut str = String::new();
+            std::io::stdin().read_line(&mut str)?;
             return Err(e);
         }
     };
-    println!("successfully enrolled keyslot with tkey reboot and everything should work!");
+    println!("\nsuccessfully enrolled keyslot with tkey reboot and everything should work!");
     println!("press enter to exit");
     let mut str = String::new();
     std::io::stdin().read_line(&mut str)?;
     Ok(code)
 }
 fn run() -> Result<ExitCode, Box<dyn Error>> {
+    let argv: Vec<String> = std::env::args().collect();
+    let kill_slot = argv.len() == 2 && argv[1] == "--kill-slot";
+    let slot_to_kill: Option<u8> = if argv.len() == 2 {
+        argv[2].parse().ok()
+    } else {
+        None
+    };
     let mut tkey = Tkey::new()?;
     //makes it easier rather than having to copy multiple files pretty nice QOL but its not perfect
-    let bin = include_bytes!("../../../client/clientApp");
-    if bin.len() < 1000 {
-        panic!("did you recompile before passing onto dispVM?")
-    }
-    load_app(&mut tkey, bin)?;
+    let bin = if kill_slot {
+        fs::read("/home/user/QubesIncoming/dom0/client")?
+    } else {
+        let bin = include_bytes!("../../../client/clientApp");
+        if bin.len() < 1000 {
+            Err("did you recompile before passing onto dispVM?")?
+        }
+        bin.to_vec()
+    };
+    load_app(&mut tkey, &bin)?;
+    drop(bin);
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
-    let mut qrexec = Command::new("/usr/bin/qrexec-client-vm")
-        .args(["dom0", "qubes.TPMProxy"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
+    let mut qrexec = if kill_slot {
+        Command::new("/usr/bin/qrexec-client-vm")
+            .args(["dom0", "qubes.LuksKillSlot"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?
+    } else {
+        Command::new("/usr/bin/qrexec-client-vm")
+            .args(["dom0", "qubes.TPMProxy"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?
+    };
     let mut stdin = qrexec.stdin.take().expect("failed to take qrexec stdin");
     let mut stdout = qrexec.stdout.take().expect("failed to take qrexec stdout");
     stdin.write_all(&nonce)?;
@@ -80,19 +105,20 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     tkey.read_exact(&mut encrypted_keyfile)?;
     let mut keyfile = [0u8; 32];
     cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
-    let current_passphrase = rpassword::prompt_password("input current luks Password>")?;
-    stdin.write_all(&[current_passphrase.len() as u8])?;
-    stdin.write_all(current_passphrase.as_bytes())?;
+    if !kill_slot {
+        let current_passphrase = rpassword::prompt_password("input current luks Password>")?;
+        stdin.write_all(&[current_passphrase.len() as u8])?;
+        stdin.write_all(current_passphrase.as_bytes())?;
+    } else {
+        stdin.write_all(&[slot_to_kill.unwrap()])?;
+    }
     stdin.write_all(&keyfile)?;
-    if qrexec.wait()?.success() {
+    let code = qrexec.wait()?;
+    if code.success() {
         println!("success!!");
         Ok(ExitCode::SUCCESS)
     } else {
-        println!("FAILED, was passphrase correct? please run qubes_enrollpt2.sh again.");
-        println!("press enter to close the program.");
-        let mut string = String::new();
-        std::io::stdin().read_line(&mut string)?;
-        Ok(ExitCode::FAILURE)
+        Err("failed to  enroll, dom0 indicated an error. was password correct?".into())
     }
 }
 fn pass_enroll(

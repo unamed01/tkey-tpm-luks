@@ -5,6 +5,13 @@ if [[ "$EUID" != "0" ]]; then
   echo must run as root
   exit 1
 fi
+if [[ "$1" == "-n" ]]; then
+  read -rp "running first time enrollment, please confirm [y/N] " ans
+  [[ "$ans" =~ ^[Yy]$ ]] || {
+    echo refused
+    exit 1
+  }
+fi
 disp_template=$(qubes-prefs default_dispvm)
 disp_name="tkey-enroll"
 builder="tkey-builder" #change this if your vm name is different..
@@ -13,6 +20,12 @@ luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
 luksD="/dev/nvme0n1p3" #change here if you didn't use auto partitioning.
 # if you change this make sure to also change last command to make sure it can execute the bin directly like xfce4-terminal can.
 enroll_term="xfce4-terminal"
+
+if ! cryptsetup isLuks "$luksD"; then
+  echo "$luksD is NOT a luks device change \$luksD on this script to your correct disk before proceeding."
+  exit 1
+fi
+
 usb="$(qvm-usb list | grep 'Tillitis' | awk '{print $1}')" || true
 if test -z "$usb"; then
   echo Tkey not plugged in, must be plugged in for enrollment.

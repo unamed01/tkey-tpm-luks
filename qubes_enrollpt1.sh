@@ -6,12 +6,6 @@ if [[ "$EUID" != "0" ]]; then
   exit 1
 fi
 
-grub_fail() {
-  echo "make sure you have grub2-efi-x64-modules installed."
-  cp /boot/efi/EFI/BOOT/BOOTX64.EFI.bak /boot/efi/EFI/BOOT/BOOTX64.EFI
-  cp /boot/efi/EFI/qubes/grubx64.efi.bak /boot/efi/EFI/qubes/grubx64.efi
-  exit 8
-}
 builder="tkey-builder" #change this if your vm name is different..
 bootD="$(findmnt -no SOURCE /boot)"
 luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
@@ -29,7 +23,9 @@ if ! qvm-run "$builder" 'test -d /home/user/tkey-tpm-luks '; then
   exit 4
 fi
 if ! qvm-run "$builder" 'test -f /home/user/tkey-tpm-luks/SALT'; then
-  qvm-run "$builder" 'head -c 32 /dev/urandom > /home/user/tkey-tpm-luks/SALT'
+  head -c 32 /dev/urandom >>/boot/SALT
+  qvm-copy-to-vm "$builder" SALT
+  qvm-run "$builder" 'mv /home/user/QubesIncoming/dom0/SALT /home/user/tkey-tpm-luks/SALT'
 fi
 
 #prevent cold build from always failing due to missing client binary
@@ -41,11 +37,13 @@ qvm-run -p "$builder" "cd /home/user/tkey-tpm-luks/host && bootdev=\"${bootD}\" 
 mkdir -p dracut/
 #these are for later
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/host/target/release/verify >verify
-chmod +x verify
-strip verify
+qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/host/target/release/Qubes_Kill_slot >Qubes_Kill_slot
+chmod +x verify Qubes_Kill_slot
+strip verify Qubes_Kill_slot
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/enroll.sh >enroll.sh
 chmod +x enroll.sh
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/qubes_enrollpt2.sh >qubes_enrollpt2.sh
+qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/qubes_KillSlot.sh >qubes_KillSlot.sh
 #get everything from builder
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/host/target/release/host >dracut/host
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/dracut/module-setup.sh >dracut/module-setup.sh
@@ -58,7 +56,7 @@ chmod +x dracut/host
 test -d /lib/dracut/modules.d/90tkey && rm -rf /lib/dracut/modules.d/90tkey || true
 mv dracut /lib/dracut/modules.d/90tkey
 #allow dom0 to see tkey on initramfs, bailing if it already can (e.g already setup for usb keyboard)
-if ! grep 'rd.qubes.dom0_usb' /etc/default/grub; then
+if ! grep 'rd.qubes.dom0_usb' /etc/default/grub &>/dev/null; then
   usbController="$(lspci | grep -i 'usb controller' | awk '{print $1}' | tr '\n' ',')"
   sed -i '/rd\.qubes\.hide_all_usb/ s/"$/ rd\.qubes\.dom0_usb='"$usbController"'"/' /etc/default/grub
 fi
@@ -88,7 +86,10 @@ grub2-mkimage \
   search_label serial sleep syslinuxcfg test tftp video xfs zstd \
   backtrace chain usb usbserial_common usbserial_pl2303 usbserial_ftdi usbserial_usbdebug \
   keylayouts at_keyboard \
-  tpm_verifier || grub_fail
+  tpm_verifier || {
+  echo "make sure you have grub2-efi-x64-modules installed."
+  exit 9
+}
 grub2-mkimage \
   -O x86_64-efi \
   -o /boot/efi/EFI/qubes/grubx64.efi \
@@ -103,7 +104,10 @@ grub2-mkimage \
   search_label serial sleep syslinuxcfg test tftp video xfs zstd \
   backtrace chain usb usbserial_common usbserial_pl2303 usbserial_ftdi usbserial_usbdebug \
   keylayouts at_keyboard \
-  tpm_verifier || grub_fail
+  tpm_verifier || {
+  echo "make sure you have grub2-efi-x64-modules installed."
+  exit 9
+}
 dracut --force --verbose
 #rebuild grub since we've editted /etc/default/grub to allow USB
 grub2-mkconfig -o /boot/grub2/grub.cfg
@@ -113,6 +117,15 @@ cat >/etc/qubes-rpc/qubes.TPMProxy <<EOF
 
 exec -c "$PWD/verify"
 EOF
+
 chmod +x /etc/qubes-rpc/qubes.TPMProxy
+
+cat >/etc/qubes-rpc/qubes.LuksKillSlot <<EOF
+#!/usr/bin/sudo bash
+
+exec -c "$PWD/Qubes_Kill_slot"
+EOF
+
+chmod +x /etc/qubes-rpc/qubes.LuksKillSlot
 
 echo "everything went well! you must now reboot so that new PCR values are enrolled correctly, then run qubes_enrollpt2.sh."
