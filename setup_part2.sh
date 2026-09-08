@@ -11,7 +11,7 @@ if [[ ! -c /dev/ttyACM0 ]]; then
   exit 2
 fi
 export bootdev="$(findmnt -n -o SOURCE /boot)"
-export luksdev="$(sudo cryptsetup status /dev/mapper/luks-* | grep device | awk '{print $2}')" || {
+export luksdev="/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)")" || true
 export luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
 if ! cryptsetup isLuks "$luksdev"; then
   echo "$luksD is NOT a luks device change \$luksD on this script to your correct disk before proceeding."
