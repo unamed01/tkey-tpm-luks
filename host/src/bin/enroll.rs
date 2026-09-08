@@ -115,6 +115,7 @@ fn enroll(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), Host
     stdin.write_all(current_pass.as_bytes())?;
     {
         let mut encrypted_keyfile = [0u8; 32];
+        tkey.read_exact(&mut encrypted_keyfile);
         let mut keyfile = [0u8; 32];
         cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
         encrypted_keyfile.zeroize();
