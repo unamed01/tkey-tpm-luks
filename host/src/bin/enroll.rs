@@ -24,14 +24,11 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         println!("failed to auth with tpm.")
     }
 
-    // this makes sure tpm signature is fine (will wait until it is if its not)
     match check_status(&mut tkey) {
-        Ok(ClientMessage::GoodSig) => println!(
-            "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
-        ),
-        Err(ClientError::InvalidSig) => println!("sig is invalid should only happen if updating."),
-        _ => return Err("host and tkey are out of sync restart the app")?,
-    }
+        Ok(ClientMessage::Ready4pass) => {}
+        Err(e) => Err(e)?,
+        _ => Err(ClientError::OutOfsync)?,
+    };
     pass_enroll(&mut tkey, &mut cipher)?;
     match enroll(&mut tkey, &mut cipher) {
         Ok(_) => Ok(ExitCode::SUCCESS),
@@ -43,11 +40,6 @@ fn pass_enroll(
     tkey: &mut Tkey,
     cipher: &mut host::ChaCha20Cipher,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match check_status(tkey) {
-        Ok(ClientMessage::Ready4pass) => {}
-        Err(e) => Err(e)?,
-        _ => Err(ClientError::OutOfsync)?,
-    };
     println!(
         "enrolling passphrase now,you'll need to type this in exactly everytime to unlock your disk. (wont be echoed)"
     );
@@ -87,7 +79,7 @@ fn pass_enroll(
 }
 fn enroll(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), HostErr> {
     println!("to enroll you must type in your currently enrolled passphrase (won't be echoed)");
-    let current_pass = rpassword::prompt_password(">")?;
+    let mut current_pass = rpassword::prompt_password(">")?;
     let current_pass_len = current_pass.len().to_string();
     let args = &[
         "luksAddKey",
@@ -110,9 +102,10 @@ fn enroll(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), Host
         }
     };
     stdin.write_all(current_pass.as_bytes())?;
+    current_pass.zeroize();
     {
         let mut encrypted_keyfile = [0u8; 32];
-        tkey.read_exact(&mut encrypted_keyfile);
+        tkey.read_exact(&mut encrypted_keyfile)?;
         let mut keyfile = [0u8; 32];
         cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
         encrypted_keyfile.zeroize();

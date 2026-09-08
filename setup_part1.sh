@@ -9,7 +9,7 @@ bootD="$(findmnt -no SOURCE /boot)"
 luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
 systemdsvc="$(systemctl list-units | grep 'systemd-cryptsetup@luks' | grep -v '/run/credentials' | awk '{print $1}')"
 systemdsvc="${systemdsvc//\\/\\\\}"
-luksD="$(findmnt -no /)" # might be wrong if using lvm
+luksD="$(findmnt -no SOURCE /)" # might be wrong if using lvm
 if ! cryptsetup isLuks "$luksD"; then
   echo "faled to find correct luks2 disk"
   echo "$luksD is NOT a luks device change the luksD value on this script to your disk."

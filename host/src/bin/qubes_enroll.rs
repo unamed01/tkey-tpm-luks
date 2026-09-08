@@ -86,6 +86,7 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     stdin.write_all(&keyfile)?;
     if qrexec.wait()?.success() {
         println!("success!!");
+        tkey.write_all(&[HostMessage::DecryptionSuccess as u8])?;
         Ok(ExitCode::SUCCESS)
     } else {
         println!("FAILED, was passphrase correct? please run qubes_enrollpt2.sh again.");

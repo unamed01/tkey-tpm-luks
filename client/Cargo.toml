@@ -9,7 +9,9 @@ p256 = { version = "0.14.0", default-features = false, features = [
   "pkcs8",
   "ecdsa",
 ] }
-x25519-dalek = { version = "3.0.0", default-features = false }
+x25519-dalek = { version = "3.0.0", default-features = false, features = [
+  "zeroize",
+] }
 chacha20 = { version = "0.10.1", default-features = false, features = [
   "cipher",
   "rng",
