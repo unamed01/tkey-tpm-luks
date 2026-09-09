@@ -1,5 +1,5 @@
-// this bin mounts /boot from it reads in client (intentionally outside of PCR checks check SECURITY.md for
-// rationale behind this choice) takes nonce gives to tpm and if tpm ever refuses to sign host sends
+// this file is main initramfs entrypoint it mounts /boot from it reads in client bin then
+// takes nonce gives to tpm and if tpm ever refuses to sign host sends
 // failure onto client then client requires user interaction before we can move onto passphrase
 // another warning is shown at systemd-ask-password (even though we can guarantee it since we
 // couldnt verify software running on host) this is vital to allow user to update kernel,xen or grub
@@ -95,7 +95,7 @@ fn ask_for_password(
 
     let mut passphrase_bytes = pass.stdout;
     let mut pass_len = passphrase_bytes.len();
-    if pass_len < 9 || pass_len == 0 {
+    if pass_len < 9 {
         passphrase_bytes.zeroize();
         ask_for_password(tkey, trustworthy, cipher)?;
         return Ok(());

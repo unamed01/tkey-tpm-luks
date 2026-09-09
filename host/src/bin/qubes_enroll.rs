@@ -80,10 +80,13 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     tkey.read_exact(&mut encrypted_keyfile)?;
     let mut keyfile = [0u8; 32];
     cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
-    let current_passphrase = rpassword::prompt_password("input current luks Password>")?;
+    encrypted_keyfile.zeroize();
+    let mut current_passphrase = rpassword::prompt_password("input current luks Password>")?;
     stdin.write_all(&[current_passphrase.len() as u8])?;
     stdin.write_all(current_passphrase.as_bytes())?;
+    current_passphrase.zeroize();
     stdin.write_all(&keyfile)?;
+    keyfile.zeroize();
     if qrexec.wait()?.success() {
         println!("success!!");
         tkey.write_all(&[HostMessage::DecryptionSuccess as u8])?;
@@ -116,7 +119,7 @@ fn pass_enroll(
         pass_enroll(tkey, cipher)?;
         return Ok(());
     };
-    let mut pass_len = pass1.trim_end().len();
+    let mut pass_len = pass1.len();
     if pass_len > u8::MAX as usize || pass_len < 8 {
         pass_len.zeroize();
         pass_enroll(tkey, cipher)?;

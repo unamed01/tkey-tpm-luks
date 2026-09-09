@@ -23,5 +23,5 @@ sudo -u $SUDO_USER cargo build --release
 sudo -u $SUDO_USER llvm-objcopy --input-target=elf32-littleriscv --output-target=binary target/riscv32i-unknown-none-elf/release/client clientApp
 cp clientApp /boot/client
 cd ../host
-sudo -u $SUDO_USER cargo build --release #make sure its built with correct bin
+bootdev="$bootdev" luksdev="$luksdev" luksUUID="$luksUUID" sudo -Eu $SUDO_USER cargo build --release #make sure its built with correct bin
 target/release/enroll

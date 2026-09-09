@@ -4,7 +4,6 @@ use chacha20::cipher::stream::StreamCipher;
 use host::{
     ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status,
 };
-use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
 use std::{
@@ -15,11 +14,11 @@ use zeroize::{Zeroize, Zeroizing};
 //this goes trough the exact same process as it would in initramfs but instead piping into
 //cryptsetup to enroll a keyslot
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let bin = fs::read("../../client/clientApp")?;
+    let bin = include_bytes!("../../../client/clientApp");
     if bin.len() < 1000 {
         panic!("ERR: bad tkey binary,did you recompile before trying to enroll?")
     }
-    let (mut tkey, trustworthy, mut cipher) = auth_with_tkey_and_tpm(bin)?;
+    let (mut tkey, trustworthy, mut cipher) = auth_with_tkey_and_tpm(bin.to_vec())?;
     if !trustworthy {
         println!("failed to auth with tpm.")
     }
@@ -67,6 +66,7 @@ fn pass_enroll(
     }
     cipher.apply_keystream(&mut password_hash);
     tkey.write_all(&password_hash)?;
+    password_hash.zeroize();
     pass_len.zeroize();
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
