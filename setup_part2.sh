@@ -14,7 +14,7 @@ export bootdev="$(findmnt -n -o SOURCE /boot)"
 export luksdev="/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)")" || true
 export luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
 if ! cryptsetup isLuks "$luksdev"; then
-  echo "$luksD is NOT a luks device change \$luksD on this script to your correct disk before proceeding."
+  echo "$luksdev is NOT a luks device change \$luksD on this script to your correct disk before proceeding."
   exit 1
 fi
 bash enroll.sh

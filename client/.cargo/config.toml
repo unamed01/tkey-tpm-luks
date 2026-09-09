@@ -5,10 +5,10 @@ target = "riscv32i-unknown-none-elf"
 codegen-units = 1
 debug = false
 debug-assertions = false
-opt-level = 3
+opt-level = 2
 overflow-checks = false
 strip = true
-lto = true
+lto = "fat"
 panic = "abort"
 
 [profile.dev]

@@ -12,7 +12,7 @@ systemdsvc="${systemdsvc//\\/\\\\}"
 luksdev="/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)")" || true
 if ! cryptsetup isLuks "$luksdev"; then
   echo "faled to find correct luks2 disk"
-  echo "$luksD is NOT a luks device change the luksD value on this script to your disk."
+  echo "$luksdev is NOT a luks device change the luksdev value on this script to your disk."
   exit 4
 fi
 if ! test -f SALT; then
@@ -29,7 +29,8 @@ strip ../dracut/host
 cd ..
 sed -i "3i \Before=${systemdsvc}" dracut/tkey-tpm-luks.service
 test -d /lib/dracut/modules.d/90tkey-tpm-luks/ && rm -rf /lib/dracut/modules.d/90tkey-tpm-luks/ || true
+rm -rf /lib/dracut/modules.d/90tkey-tpm-luks/ || true
 mkdir -p /lib/dracut/modules.d/90tkey-tpm-luks/
-mv dracut/ /lib/dracut/modules.d/90tkey-tpm-luks/ #makes module
+cp dracut/ /lib/dracut/modules.d/90tkey-tpm-luks/ #makes module
 dracut --force --verbose                          #rebuilds initramfs
 echo "must reboot to make sure PCRs are updated (necessary since we rebuilt initramfs and tpm still has old PCR values) then run setup_part2.sh."

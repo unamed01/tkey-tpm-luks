@@ -200,7 +200,6 @@ dependencies = [
  "ff",
  "group",
  "hybrid-array",
- "pkcs8",
  "rand_core",
  "sec1",
  "subtle",
@@ -289,16 +288,6 @@ dependencies = [
  "primefield",
  "primeorder",
  "sha2",
-]
-
-[[package]]
-name = "pkcs8"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "451913da69c775a56034ea8d9003d27ee8948e12443eae7c038ba100a4f21cb7"
-dependencies = [
- "der",
- "spki",
 ]
 
 [[package]]
@@ -414,15 +403,6 @@ checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 dependencies = [
  "digest",
  "rand_core",
-]
-
-[[package]]
-name = "spki"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d9efca8738c78ee9484207732f728b1ef517bbb1833d6fc0879ca898a522f6f"
-dependencies = [
- "der",
 ]
 
 [[package]]
