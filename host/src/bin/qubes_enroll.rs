@@ -75,6 +75,11 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
         }
         Err(e) => Err(e)?,
     }
+    match check_status(&mut tkey) {
+        Ok(ClientMessage::Ready4pass) => {}
+        Err(e) => Err(e)?,
+        _ => Err(ClientError::OutOfsync)?,
+    };
     pass_enroll(&mut tkey, &mut cipher)?;
     let mut encrypted_keyfile = [0u8; 32];
     tkey.read_exact(&mut encrypted_keyfile)?;
@@ -103,11 +108,6 @@ fn pass_enroll(
     tkey: &mut Tkey,
     cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match check_status(tkey) {
-        Ok(ClientMessage::Ready4pass) => {}
-        Err(e) => Err(e)?,
-        _ => Err(ClientError::OutOfsync)?,
-    };
     println!(
         "enrolling passphrase now,you'll need to type this in exactly everytime to unlock your disk. (wont be echoed)"
     );
