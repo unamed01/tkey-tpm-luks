@@ -4,7 +4,6 @@ use chacha20::cipher::stream::StreamCipher;
 use host::{
     ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status,
 };
-use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
 use std::{
@@ -15,23 +14,20 @@ use zeroize::{Zeroize, Zeroizing};
 //this goes trough the exact same process as it would in initramfs but instead piping into
 //cryptsetup to enroll a keyslot
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let bin = fs::read("../../client/clientApp")?;
+    let bin = include_bytes!("../../../client/clientApp");
     if bin.len() < 1000 {
         panic!("ERR: bad tkey binary,did you recompile before trying to enroll?")
     }
-    let (mut tkey, trustworthy, mut cipher) = auth_with_tkey_and_tpm(bin)?;
+    let (mut tkey, trustworthy, mut cipher) = auth_with_tkey_and_tpm(bin.to_vec())?;
     if !trustworthy {
         println!("failed to auth with tpm.")
     }
 
-    // this makes sure tpm signature is fine (will wait until it is if its not)
     match check_status(&mut tkey) {
-        Ok(ClientMessage::GoodSig) => println!(
-            "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
-        ),
-        Err(ClientError::InvalidSig) => println!("sig is invalid should only happen if updating."),
-        _ => return Err("host and tkey are out of sync restart the app")?,
-    }
+        Ok(ClientMessage::Ready4pass) => {}
+        Err(e) => Err(e)?,
+        _ => Err(ClientError::OutOfsync)?,
+    };
     pass_enroll(&mut tkey, &mut cipher)?;
     match enroll(&mut tkey, &mut cipher) {
         Ok(_) => Ok(ExitCode::SUCCESS),
@@ -43,11 +39,6 @@ fn pass_enroll(
     tkey: &mut Tkey,
     cipher: &mut host::ChaCha20Cipher,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match check_status(tkey) {
-        Ok(ClientMessage::Ready4pass) => {}
-        Err(e) => Err(e)?,
-        _ => Err(ClientError::OutOfsync)?,
-    };
     println!(
         "enrolling passphrase now,you'll need to type this in exactly everytime to unlock your disk. (wont be echoed)"
     );
@@ -56,17 +47,14 @@ fn pass_enroll(
     let pass2: Zeroizing<String> = rpassword::prompt_password(">")?.into();
     if pass1 != pass2 {
         println!("passwords DID NOT match, try again.");
-        tkey.write_all(&[0u8])?;
-        _ = check_status(tkey);
         pass_enroll(tkey, cipher)?;
         return Ok(());
     };
     let mut pass_len = pass1.len();
     if pass_len < 8 {
         pass_len.zeroize();
-        tkey.write_all(&[0u8])?;
-        _ = check_status(tkey);
-        Err(ClientError::PassLen)?;
+        pass_enroll(tkey, cipher)?;
+        return Ok(());
     }
     let argon2 = host::get_argon2();
     let mut password_hash = [0u8; 32];
@@ -78,6 +66,7 @@ fn pass_enroll(
     }
     cipher.apply_keystream(&mut password_hash);
     tkey.write_all(&password_hash)?;
+    password_hash.zeroize();
     pass_len.zeroize();
     match check_status(tkey) {
         Ok(ClientMessage::GoodPass) => {
@@ -90,7 +79,7 @@ fn pass_enroll(
 }
 fn enroll(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), HostErr> {
     println!("to enroll you must type in your currently enrolled passphrase (won't be echoed)");
-    let current_pass = rpassword::prompt_password(">")?;
+    let mut current_pass = rpassword::prompt_password(">")?;
     let current_pass_len = current_pass.len().to_string();
     let args = &[
         "luksAddKey",
@@ -113,13 +102,13 @@ fn enroll(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), Host
         }
     };
     stdin.write_all(current_pass.as_bytes())?;
+    current_pass.zeroize();
     {
         let mut encrypted_keyfile = [0u8; 32];
-        tkey.read_exact(&mut encrypted_keyfile);
+        tkey.read_exact(&mut encrypted_keyfile)?;
         let mut keyfile = [0u8; 32];
         cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
         encrypted_keyfile.zeroize();
-        tkey.read_exact(&mut keyfile)?;
         stdin.write_all(&keyfile)?;
         keyfile.zeroize();
     }

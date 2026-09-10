@@ -100,6 +100,11 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
         }
         Err(e) => Err(e)?,
     }
+    match check_status(&mut tkey) {
+        Ok(ClientMessage::Ready4pass) => {}
+        Err(e) => Err(e)?,
+        _ => Err(ClientError::OutOfsync)?,
+    };
     pass_enroll(&mut tkey, &mut cipher)?;
     let mut encrypted_keyfile = [0u8; 32];
     tkey.read_exact(&mut encrypted_keyfile)?;
@@ -116,6 +121,7 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     let code = qrexec.wait()?;
     if code.success() {
         println!("success!!");
+        tkey.write_all(&[HostMessage::DecryptionSuccess as u8])?;
         Ok(ExitCode::SUCCESS)
     } else {
         Err("failed to  enroll, dom0 indicated an error. was password correct?".into())
@@ -125,11 +131,6 @@ fn pass_enroll(
     tkey: &mut Tkey,
     cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match check_status(tkey) {
-        Ok(ClientMessage::Ready4pass) => {}
-        Err(e) => Err(e)?,
-        _ => Err(ClientError::OutOfsync)?,
-    };
     println!(
         "enrolling passphrase now,you'll need to type this in exactly everytime to unlock your disk. (wont be echoed)"
     );
@@ -138,16 +139,12 @@ fn pass_enroll(
     let pass2: Zeroizing<String> = rpassword::prompt_password(">")?.into();
     if pass1 != pass2 {
         println!("passwords DID NOT match, try again.");
-        tkey.write_all(&[0u8])?;
-        _ = check_status(tkey);
         pass_enroll(tkey, cipher)?;
         return Ok(());
     };
-    let mut pass_len = pass1.trim_end().len();
+    let mut pass_len = pass1.len();
     if pass_len > u8::MAX as usize || pass_len < 8 {
         pass_len.zeroize();
-        tkey.write_all(&[0u8])?;
-        _ = check_status(tkey);
         pass_enroll(tkey, cipher)?;
         return Ok(());
     }

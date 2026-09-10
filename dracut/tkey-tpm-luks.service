@@ -9,7 +9,7 @@ Wants=dev-ttyACM0.device
 Type=oneshot
 ExecStart=/usr/bin/host
 RemainAfterExit=yes
-TimeoutStartSec=120
+TimeoutStartSec=infinity
 
 [Install]
 WantedBy=cryptsetup.target

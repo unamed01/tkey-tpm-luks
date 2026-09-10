@@ -1,5 +1,5 @@
-// this bin mounts /boot from it reads in client (intentionally outside of PCR checks check SECURITY.md for
-// rationale behind this choice) takes nonce gives to tpm and if tpm ever refuses to sign host sends
+// this file is main initramfs entrypoint it mounts /boot from it reads in client bin then
+// takes nonce gives to tpm and if tpm ever refuses to sign host sends
 // failure onto client then client requires user interaction before we can move onto passphrase
 // another warning is shown at systemd-ask-password (even though we can guarantee it since we
 // couldnt verify software running on host) this is vital to allow user to update kernel,xen or grub
@@ -94,13 +94,15 @@ fn ask_for_password(
         .output()?;
 
     let mut passphrase_bytes = pass.stdout;
-    let mut actual_pass_len = passphrase_bytes.len() - 1;
-    if actual_pass_len < 8 {
+    let mut pass_len = passphrase_bytes.len();
+    if pass_len < 9 {
         passphrase_bytes.zeroize();
-        tkey.write_all(&[0u8])?;
-        _ = check_status(tkey);
-        Err(ClientError::PassLen)?;
+        ask_for_password(tkey, trustworthy, cipher)?;
+        return Ok(());
     }
+    //strip systemd-ask-password newline
+    let mut actual_pass_len = pass_len - 1;
+    pass_len.zeroize();
     let argon2 = get_argon2();
     let mut hashed_pass = [0u8; 32];
     if let Err(e) = argon2.hash_password_into(
@@ -113,8 +115,10 @@ fn ask_for_password(
         eprintln!("{e}");
         return Err(ClientError::UnknownError);
     }
+    passphrase_bytes.zeroize();
     let mut encrypted_hashed_pass = [0u8; 32];
     cipher.apply_keystream_b2b(&hashed_pass, &mut encrypted_hashed_pass);
+    hashed_pass.zeroize();
     tkey.write_all(&encrypted_hashed_pass)?;
     actual_pass_len.zeroize();
     match check_status(tkey) {

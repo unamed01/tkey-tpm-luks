@@ -69,30 +69,30 @@ global_asm!(
 );
 
 #[repr(u8)]
-pub enum HostMessage {
+enum HostMessage {
     DecryptionSuccess = 0x99,
-    DecryptionError = 0x98,
+    _DecryptionError = 0x98,
     TpmSigned = 0x97,
-    TpmRefusedToSign = 0x90,
+    _TpmRefusedToSign = 0x90,
 }
 
 #[repr(u8)]
-pub enum ClientMessage {
+enum ClientMessage {
     GoodSig = 0x20,
     GoodPass = 0x21,
     Ready4pass = 0x22,
 }
 
 #[repr(u8)]
-pub enum ClientError {
+enum ClientError {
     Blake2 = 0x10,
-    PassLen = 0x11,
+    _PassLen = 0x11,
     MalformedSig = 0x12,
     InvalidSig = 0x13,
     BadPubkey = 0x14,
-    IOError = 0x15,
+    _IOError = 0x15,
     ChaChaInit = 0x16,
-    UnknownError,
+    _UnknownError,
     //same thing as InvalidSig since we don't trust host any further if TPM let us know that it
     //can't give us signed nonce than if it actually gave us invalid signed nonce, therefore both
     //are treated the same.
@@ -113,14 +113,8 @@ extern "C" fn main() -> ! {
     random(&mut encryption_nonce, b"");
     write_u8_slice(&encryption_nonce);
     let mut seed = [0u8; 32];
-    let mut cdi = read_cdi();
-    if blake2s(&mut seed, &cdi, b"nI2jlrOM9nlCnWXY/BpR0qe1Al4IltMz%").is_err() {
-        cdi.zeroize();
-        write_u8(ClientError::Blake2 as u8);
-        rustkey::abort()
-    }
+    random(&mut seed, b"");
     let mut rng = ChaCha20Rng::from_seed(seed);
-    cdi.zeroize();
     seed.zeroize();
     let tkey_secret = EphemeralSecret::random_from_rng(&mut rng);
     let tkey_public = PublicKey::from(&tkey_secret);
