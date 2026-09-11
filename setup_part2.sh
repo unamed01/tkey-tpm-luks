@@ -21,7 +21,7 @@ bash enroll.sh
 cd client/
 sudo -u $SUDO_USER cargo build --release
 sudo -u $SUDO_USER llvm-objcopy --input-target=elf32-littleriscv --output-target=binary target/riscv32i-unknown-none-elf/release/client clientApp
-cp clientApp /boot/client
+cp -r clientApp /boot/client
 cd ../host
 bootdev="$bootdev" luksdev="$luksdev" luksUUID="$luksUUID" sudo -Eu $SUDO_USER cargo build --release #make sure its built with correct bin
 target/release/enroll

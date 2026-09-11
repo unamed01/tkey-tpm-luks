@@ -23,7 +23,9 @@ if ! qvm-run "$builder" 'test -d /home/user/tkey-tpm-luks '; then
   exit 4
 fi
 if ! qvm-run "$builder" 'test -f /home/user/tkey-tpm-luks/SALT'; then
-  head -c 32 /dev/urandom >>/boot/SALT
+  if ! [[ -f "/boot/SALT" ]]; then
+    head -c 32 /dev/urandom >/boot/SALT
+  fi
   qvm-copy-to-vm "$builder" SALT
   qvm-run "$builder" 'mv /home/user/QubesIncoming/dom0/SALT /home/user/tkey-tpm-luks/SALT'
 fi

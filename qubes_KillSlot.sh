@@ -19,6 +19,11 @@ luksD="/dev/nvme0n1p3" #change here if you didn't use auto partitioning.
 # if you change this make sure to also change last command to make sure it can execute the bin directly like xfce4-terminal can.
 enroll_term="xfce4-terminal"
 
+if ! cryptsetup isLuks "$luksD"; then
+  echo "$luksD is NOT a luks device change $luksD on this script to your correct disk before proceeding."
+  exit 1
+fi
+
 if ! qvm-prefs "$disp_name" &>/dev/null; then
   qvm-create --class DispVM --label red --property netvm='' -t "$disp_template" "$disp_name"
 else

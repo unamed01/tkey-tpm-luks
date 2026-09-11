@@ -26,12 +26,8 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Err(e) => {
             writeln!(f, "tpm refused to unseal")?;
             writeln!(f, "{}", e)?;
-            writeln!(
-                f,
-                "moving on this is only meant to happen if you're updating."
-            )?;
-            stdout().write_all(&[HostErr::TpmRefusedToSign as u8])?;
-            stdout().flush()?;
+            stdout().write_all(&[HostErr::TpmError as u8])?;
+            Err(e)?
         }
     };
     kill_slot()?;

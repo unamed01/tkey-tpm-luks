@@ -5,13 +5,11 @@ if [[ "$EUID" != "0" ]]; then
   echo must run as root
   exit 1
 fi
-if [[ "$1" == "-n" ]]; then
-  read -rp "running first time enrollment, please confirm [y/N] " ans
-  [[ "$ans" =~ ^[Yy]$ ]] || {
-    echo refused
-    exit 1
-  }
-fi
+read -rp "running first time enrollment, please confirm [y/N] " ans
+[[ "$ans" =~ ^[Yy]$ ]] || {
+  echo refused
+  exit 1
+}
 disp_template=$(qubes-prefs default_dispvm)
 disp_name="tkey-enroll"
 builder="tkey-builder" #change this if your vm name is different..

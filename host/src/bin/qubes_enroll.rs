@@ -29,15 +29,16 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
     };
     println!("\nsuccessfully enrolled keyslot with tkey reboot and everything should work!");
-    println!("press enter to exit");
+    println!("press enter to exit.");
     let mut str = String::new();
     std::io::stdin().read_line(&mut str)?;
     Ok(code)
 }
 fn run() -> Result<ExitCode, Box<dyn Error>> {
     let argv: Vec<String> = std::env::args().collect();
-    let kill_slot = argv.len() == 2 && argv[1] == "--kill-slot";
-    let slot_to_kill: Option<u8> = if argv.len() == 2 {
+    let kill_slot = argv.len() == 3 && argv[1] == "--kill-slot";
+    let slot_to_kill: Option<u8> = if argv.len() == 3 {
+        println!("running in kill slot mode.");
         argv[2].parse().ok()
     } else {
         None
@@ -84,6 +85,9 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
             tkey.write_all(&sig_bytes)?;
         }
         Err(HostErr::TpmRefusedToSign) => {
+            if kill_slot {
+                Err("refusing to continue, current binary isn't enrolled with TPM")?;
+            }
             println!("tpm refused to sign..");
             tkey.write_all(&[HostErr::TpmRefusedToSign as u8])?;
         }
