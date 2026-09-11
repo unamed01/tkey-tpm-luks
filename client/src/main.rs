@@ -126,7 +126,12 @@ extern "C" fn main() -> ! {
     let mut cipher = ChaCha20::new_from_slices(ss.as_bytes(), &encryption_nonce)
         .map_err(|_| write_u8(ClientError::ChaChaInit as u8))
         .unwrap();
-    match verify_sig(nonce) {
+    let mut challange = [0u8; 108];
+    challange[0..32].copy_from_slice(&nonce);
+    challange[32..64].copy_from_slice(&host_public_bytes);
+    challange[64..96].copy_from_slice(tkey_public.as_bytes());
+    challange[96..108].copy_from_slice(&encryption_nonce);
+    match verify_sig(challange) {
         Ok(_) => set(LED_GREEN),
         //this is shouldn't happen unless user renerolled to new PCR values before updating client app
         //should be way more caitious when you see purple vs yellow host might be trying to give a bad signature or replay an old one
@@ -196,7 +201,7 @@ extern "C" fn main() -> ! {
     done()
 }
 
-fn verify_sig(nonce: [u8; 32]) -> Result<(), ClientError> {
+fn verify_sig(challange: [u8; 108]) -> Result<(), ClientError> {
     //shouldnt fail since we've checked pubkey at compile time
     let key_bytes: &[u8; 91] = include_bytes!("../../tpm_pubkey_raw.bin");
     let tpm_pubkey =
@@ -208,7 +213,7 @@ fn verify_sig(nonce: [u8; 32]) -> Result<(), ClientError> {
         read_into(&mut sig);
         let sig = Signature::try_from(&sig[..]).map_err(|_| ClientError::MalformedSig)?;
         tpm_pubkey
-            .verify(&nonce, &sig)
+            .verify(&challange, &sig)
             .map_err(|_| ClientError::InvalidSig)?;
         write_u8(ClientMessage::GoodSig as u8);
         Ok(())

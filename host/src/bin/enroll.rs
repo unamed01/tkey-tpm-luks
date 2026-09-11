@@ -20,7 +20,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     }
     let (mut tkey, trustworthy, mut cipher) = auth_with_tkey_and_tpm(bin.to_vec())?;
     if !trustworthy {
-        println!("failed to auth with tpm.")
+        println!("failed to auth with tpm, this is likely an error.")
     }
 
     match check_status(&mut tkey) {

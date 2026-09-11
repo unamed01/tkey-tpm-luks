@@ -11,10 +11,10 @@ use zeroize::Zeroizing;
 
 //this is the code that actually gets run in dom0.
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let mut nonce = [0u8; 32];
-    std::io::stdin().read_exact(&mut nonce)?;
+    let mut challange = [0u8; 108];
+    std::io::stdin().read_exact(&mut challange)?;
     let mut f = fs::File::create("/root/tkey-files/verify.log")?;
-    match verify(&nonce) {
+    match verify(challange) {
         Ok(s) => {
             stdout().write_all(&[HostMessage::TpmSigned as u8])?;
             stdout().write_all(&s)?;

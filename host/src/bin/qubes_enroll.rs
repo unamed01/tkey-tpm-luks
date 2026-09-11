@@ -72,8 +72,8 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     };
     let mut stdin = qrexec.stdin.take().expect("failed to take qrexec stdin");
     let mut stdout = qrexec.stdout.take().expect("failed to take qrexec stdout");
-    stdin.write_all(&nonce)?;
-    let mut cipher = host::get_chacha20_cipher(&mut tkey)?;
+    let (mut cipher, challange) = host::get_chacha20_cipher(&mut tkey, nonce)?;
+    stdin.write_all(&challange)?;
     let mut b = [0u8];
     stdout.read_exact(&mut b)?;
     match HostMessage::try_from(b[0]) {

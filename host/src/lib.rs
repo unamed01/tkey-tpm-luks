@@ -7,6 +7,7 @@ use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::error::Error;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::Path;
+use std::time::Duration;
 
 use chacha20::cipher::stream::StreamCipherCoreWrapper;
 use chacha20::{ChaCha20, ChaCha20Rng, KeyIvInit, rand_core::SeedableRng};
@@ -16,7 +17,6 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
-use std::thread;
 use termios::{Termios, cfmakeraw, tcsetattr};
 use tss_esapi::structures::MaxBuffer;
 use tss_esapi::{
@@ -252,7 +252,7 @@ pub fn check_status(port: &mut Tkey) -> Result<ClientMessage, ClientError> {
 // takes in nonce interfaces with TPM asks to sign nonce and gets sig back.
 // # Errors
 // when PCRs don't match or fails to communicate with TPM properly
-pub fn verify(nonce: &[u8; 32]) -> Result<[u8; 64], Box<dyn Error>> {
+pub fn verify(ticket: [u8; 108]) -> Result<[u8; 64], Box<dyn Error>> {
     let mut ctx = Context::new(TctiNameConf::from_str("device:/dev/tpmrm0")?)?;
 
     let sess = ctx
@@ -285,7 +285,7 @@ pub fn verify(nonce: &[u8; 32]) -> Result<[u8; 64], Box<dyn Error>> {
     let tpm_handle = TpmHandle::try_from(0x8100_0001u32)?;
     let key_handle: KeyHandle = ctx.tr_from_tpm_public(tpm_handle)?.into();
 
-    let nonce_buf = MaxBuffer::try_from(nonce.to_vec())?;
+    let nonce_buf = MaxBuffer::try_from(ticket.to_vec())?;
     let (digest, ticket) = ctx.hash(nonce_buf, HashingAlgorithm::Sha256, Hierarchy::Null)?;
     // apply policy session to the next command
     ctx.set_sessions((Some(AuthSession::PolicySession(policy_sess)), None, None));
@@ -362,14 +362,8 @@ pub fn auth_with_tkey_and_tpm(
     load_app(&mut tkey, bin.as_slice())?;
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
-    //both TPM and Tkey are pretty slow so this saves a bit of time (kinda important here for UX)
-    let verify_thread = thread::spawn(move || -> Result<[u8; 64], String> {
-        verify(&nonce).map_err(|e| e.to_string())
-    });
-
-    let cipher = get_chacha20_cipher(&mut tkey)?;
-
-    let mut trustworthy = match verify_thread.join().map_err(|e| format!("err {e:?}"))? {
+    let (cipher, challange) = get_chacha20_cipher(&mut tkey, nonce)?;
+    let mut trustworthy = match verify(challange) {
         Ok(sig) => {
             tkey.write_all(&[HostMessage::TpmSigned as u8])?;
             tkey.write_all(&sig)?;
@@ -396,10 +390,10 @@ pub fn auth_with_tkey_and_tpm(
     Ok((tkey, trustworthy, cipher))
 }
 
-// loads client app onto tkey.
-//# Errors
-//when tkey is already on app mode
-//or binary gets corrupted on the way to tkeybinary gets corrupted on the way to tkey
+/// loads client app onto tkey.
+///# Errors
+///when tkey is already on app mode
+///or binary gets corrupted on the way to tkeybinary gets corrupted on the way to tkey
 pub fn load_app(tkey: &mut Tkey, bin: &[u8]) -> Result<(), Box<dyn Error>> {
     let mut hasher = Blake2s256::new();
     let bin_len: u32 = bin.len() as u32;
@@ -428,6 +422,22 @@ pub fn load_app(tkey: &mut Tkey, bin: &[u8]) -> Result<(), Box<dyn Error>> {
         frame[2..2 + bytes.len()].copy_from_slice(bytes);
         tkey.write_all(&frame)?;
         if i == total - 1 {
+            let expected = (total - 1) as i32 * 5;
+            let mut num: libc::c_int = 0;
+            let mut passes = 0;
+            while num != expected {
+                if passes < 20 {
+                    passes += 1;
+                } else {
+                    Err("binary got corrupted, must restart.")?;
+                }
+                if 0 != unsafe { libc::ioctl(tkey.tkey.as_raw_fd(), libc::FIONREAD, &mut num) } {
+                    Err("failed to get bytes to read")?;
+                };
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let mut expected_buf = vec![0u8; expected as usize];
+            tkey.read_exact(&mut expected_buf)?;
             let mut resp = [0u8; 129];
             tkey.read_exact(&mut resp)?;
             hasher.update(&frame[2..2 + bytes.len()]);
@@ -439,27 +449,20 @@ pub fn load_app(tkey: &mut Tkey, bin: &[u8]) -> Result<(), Box<dyn Error>> {
             break;
         }
         hasher.update(&frame[2..2 + bytes.len()]);
-        let mut resp = [0u8; 5];
-        tkey.read_exact(&mut resp)?;
-        if resp[2] != 0 {
-            return Err("TKey rejected a chunk (STATUS_BAD)".into());
-        }
     }
     Ok(())
 }
-// communicates with tkey to get SS trough assymetric crypto (X25519)
-// # Errors
-// if we fail to communicate with tkey. e.g gets unplugged (shouldn't Error)
+/// communicates with tkey to get SS trough assymetric crypto (X25519)
+/// # Errors
+/// if we fail to communicate with tkey. e.g gets unplugged (shouldn't Error)
 pub fn get_chacha20_cipher(
     tkey: &mut Tkey,
-) -> Result<StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>, Box<dyn Error>> {
+    nonce: [u8; 32],
+) -> Result<(ChaCha20Cipher, [u8; 108]), Box<dyn Error>> {
     let mut encryption_nonce = [0u8; 12];
     tkey.read_exact(&mut encryption_nonce)?;
-
-    //TODO: take seed from TPM sealed object
     let mut seed = [0u8; 32];
     getrandom::fill(&mut seed)?;
-
     let mut rng = ChaCha20Rng::from_seed(seed);
     let host_secret = EphemeralSecret::random_from_rng(&mut rng);
     let host_pub = PublicKey::from(&host_secret);
@@ -469,5 +472,10 @@ pub fn get_chacha20_cipher(
     let tkey_pub = PublicKey::from(tkey_pub_bytes);
     let ss = host_secret.diffie_hellman(&tkey_pub);
     let cipher = ChaCha20::new_from_slices(ss.as_bytes(), &encryption_nonce)?;
-    Ok(cipher)
+    let mut challange = [0u8; 108];
+    challange[0..32].copy_from_slice(&nonce);
+    challange[32..64].copy_from_slice(host_pub.as_bytes());
+    challange[64..96].copy_from_slice(&tkey_pub_bytes);
+    challange[96..108].copy_from_slice(&encryption_nonce);
+    Ok((cipher, challange))
 }

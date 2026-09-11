@@ -1,6 +1,6 @@
 //kill-slot
 use host::{HostErr, HostMessage, verify};
-use std::fs::{self, File};
+use std::fs;
 use std::process::ExitCode;
 use std::process::{Command, Stdio};
 use std::{
@@ -11,14 +11,13 @@ use zeroize::Zeroizing;
 
 //this is the code that actually gets run in dom0.
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let mut nonce = [0u8; 32];
-    std::io::stdin().read_exact(&mut nonce)?;
+    let mut challange = [0u8; 108];
+    std::io::stdin().read_exact(&mut challange)?;
     let mut f = fs::OpenOptions::new()
         .append(true)
-        .write(true)
         .create(true)
         .open("/root/tkey-files/Qubes_Kill_slot.rs")?;
-    match verify(&nonce) {
+    match verify(challange) {
         Ok(s) => {
             stdout().write_all(&[HostMessage::TpmSigned as u8])?;
             stdout().write_all(&s)?;
