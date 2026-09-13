@@ -3,11 +3,9 @@
 //check README.md for setup help you should still audit the code before doing so though
 //uses qrexec to talk to dom0 which owns tpm this will talk to verify bin.
 //enrollment should be done inside an airgapped dispVM.
-use chacha20::cipher::stream::{StreamCipher, StreamCipherCoreWrapper};
-use chacha20::{ChaChaCore, R20, variants::Ietf};
+use chacha20::cipher::stream::StreamCipher;
 use host::{ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app};
 use std::error::Error;
-use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
 use std::{
@@ -19,7 +17,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let code = match run() {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("ERR: {e}");
+            eprintln!("ERR: {e}\n");
             eprintln!("\nfailed to enroll, please try again.");
             eprintln!("open a issue, if this issue persists.");
             println!("press enter to exit.");
@@ -38,43 +36,37 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     let argv: Vec<String> = std::env::args().collect();
     let kill_slot = argv.len() == 3 && argv[1] == "--kill-slot";
     let slot_to_kill: Option<u8> = if argv.len() == 3 {
-        println!("running in kill slot mode.");
-        argv[2].parse().ok()
+        let num = match argv[2].parse() {
+            Ok(s) => s,
+            Err(_) => Err("ERR:didn't get a integer from argv")?,
+        };
+        if num > 32 {
+            Err("not a valid luks2 keyslot, number > 32.")?;
+        }
+        println!("will kill slot number: {num}!");
+        Some(num)
     } else {
         None
     };
     let mut tkey = Tkey::new()?;
     //makes it easier rather than having to copy multiple files pretty nice QOL but its not perfect
-    let bin = if kill_slot {
-        fs::read("/home/user/QubesIncoming/dom0/client")?
-    } else {
-        let bin = include_bytes!("../../../client/clientApp");
-        if bin.len() < 1000 {
-            Err("did you recompile before passing onto dispVM?")?
-        }
-        bin.to_vec()
-    };
-    load_app(&mut tkey, &bin)?;
-    drop(bin);
+    let bin = include_bytes!("../../../client/clientApp");
+    if bin.len() < 1000 {
+        Err("did you recompile before passing onto dispVM?")?
+    }
+    load_app(&mut tkey, bin)?;
     let mut nonce = [0u8; 32];
     tkey.read_exact(&mut nonce)?;
-    let mut qrexec = if kill_slot {
-        Command::new("/usr/bin/qrexec-client-vm")
-            .args(["dom0", "qubes.LuksKillSlot"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?
-    } else {
-        Command::new("/usr/bin/qrexec-client-vm")
-            .args(["dom0", "qubes.TPMProxy"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?
-    };
+    let mut qrexec = Command::new("/usr/bin/qrexec-client-vm")
+        .args(["dom0", "qubes.TPMProxy"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
     let mut stdin = qrexec.stdin.take().expect("failed to take qrexec stdin");
     let mut stdout = qrexec.stdout.take().expect("failed to take qrexec stdout");
     let (mut cipher, challange) = host::get_chacha20_cipher(&mut tkey, nonce)?;
     stdin.write_all(&challange)?;
+    stdin.flush()?;
     let mut b = [0u8];
     stdout.read_exact(&mut b)?;
     match HostMessage::try_from(b[0]) {
@@ -86,7 +78,9 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
         }
         Err(HostErr::TpmRefusedToSign) => {
             if kill_slot {
-                Err("refusing to continue, current binary isn't enrolled with TPM")?;
+                Err(
+                    "refusing to continue, current binary isn't enrolled with TPM. run qubes_enrollpt2",
+                )?;
             }
             println!("tpm refused to sign..");
             tkey.write_all(&[HostErr::TpmRefusedToSign as u8])?;
@@ -98,9 +92,9 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
         Ok(ClientMessage::GoodSig) => println!(
             "tkey successfully authenticated with tpm (ALWAYS make sure tkey light is green before proceeding with passphrase.)"
         ),
-        Ok(_) => Err("tkey and host are out of sync (but sig is fine?) restart app.")?,
+        Ok(_) => Err("tkey and host are out of sync (but sig is fine?) must restart app.")?,
         Err(ClientError::InvalidSig) => {
-            println!("sig is invalid (expected if already rebooted on a update.)")
+            println!("sig is invalid (only expected if already rebooted on a update.)")
         }
         Err(e) => Err(e)?,
     }
@@ -113,15 +107,26 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     let mut encrypted_keyfile = [0u8; 32];
     tkey.read_exact(&mut encrypted_keyfile)?;
     let mut keyfile = [0u8; 32];
+    let current_passphrase = rpassword::prompt_password("input current luks Password>")?;
+    stdin.write_all(&[current_passphrase.len() as u8])?;
+    stdin.write_all(current_passphrase.as_bytes())?;
     cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
+    stdin.write_all(&keyfile)?;
+    stdin.flush()?;
+    let mut b = [0u8; 1];
+    stdout.read_exact(&mut b)?;
+    match HostMessage::try_from(b[0]) {
+        Ok(HostMessage::DecryptionSuccess) => println!("successful enrollment!"),
+        Err(e) => Err(e)?,
+        _ => Err(HostErr::UnknownError)?,
+    }
     if !kill_slot {
-        let current_passphrase = rpassword::prompt_password("input current luks Password>")?;
-        stdin.write_all(&[current_passphrase.len() as u8])?;
-        stdin.write_all(current_passphrase.as_bytes())?;
+        stdin.write_all(&[0x0u8])?;
+        stdin.flush()?;
     } else {
         stdin.write_all(&[slot_to_kill.unwrap()])?;
+        stdin.flush()?;
     }
-    stdin.write_all(&keyfile)?;
     let code = qrexec.wait()?;
     if code.success() {
         println!("success!!");
@@ -133,7 +138,7 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
 }
 fn pass_enroll(
     tkey: &mut Tkey,
-    cipher: &mut StreamCipherCoreWrapper<ChaChaCore<R20, Ietf>>,
+    cipher: &mut host::ChaCha20Cipher,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "enrolling passphrase now,you'll need to type this in exactly everytime to unlock your disk. (wont be echoed)"

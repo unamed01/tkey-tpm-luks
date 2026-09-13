@@ -426,7 +426,7 @@ pub fn load_app(tkey: &mut Tkey, bin: &[u8]) -> Result<(), Box<dyn Error>> {
             let mut num: libc::c_int = 0;
             let mut passes = 0;
             while num != expected {
-                if passes < 20 {
+                if passes < 70 {
                     passes += 1;
                 } else {
                     Err("binary got corrupted, must restart.")?;

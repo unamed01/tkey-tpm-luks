@@ -77,8 +77,8 @@ fn enroll() -> Result<(), HostErr> {
     //writes current passphrase
     stdin.write_all(current_pass.as_bytes())?;
     //takes keyfile from tkey from vm then sends over to cryptsetup
+    let mut keyfile: Zeroizing<[u8; 32]> = [0u8; 32].into();
     {
-        let mut keyfile: Zeroizing<[u8; 32]> = [0u8; 32].into();
         io::stdin().read_exact(&mut *keyfile)?;
         stdin.write_all(&*keyfile)?;
     }
@@ -88,8 +88,45 @@ fn enroll() -> Result<(), HostErr> {
         None => return Err(HostErr::CryptsetupKilled),
     };
     if status_code == 0 {
-        Ok(())
+        stdout().write_all(&[HostMessage::DecryptionSuccess as u8])?;
+        stdout().flush()?;
+        let mut num = [0u8; 1];
+        io::stdin().read_exact(&mut num)?;
+        if num[0] != 0x0 {
+            kill_slot(*keyfile, num[0])
+        } else {
+            Ok(())
+        }
     } else {
         Err(HostErr::CryptsetupErr)
+    }
+}
+fn kill_slot(keyfile: [u8; 32], slot: u8) -> Result<(), HostErr> {
+    let args = &[
+        "luksKillSlot",
+        "--batch-mode",
+        "--verify-passphrase",
+        "--key-file=-",
+        "--keyfile-size=32",
+        host::ENCRYPTEDDISK,
+        &slot.to_string(),
+    ];
+    let mut cryptsetup = Command::new("/usr/sbin/cryptsetup")
+        .args(args)
+        .stdin(Stdio::piped())
+        .spawn()?;
+    let mut stdin = match cryptsetup.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            return Err(HostErr::PipeError);
+        }
+    };
+    stdin.write_all(&keyfile)?;
+    if cryptsetup.wait()?.success() {
+        let mut f = fs::File::create("/root/tkey-files/verify.log")?;
+        writeln!(f, "successfully killed slot {slot}!!")?;
+        Ok(())
+    } else {
+        Err(HostErr::CryptsetupKilled)?
     }
 }

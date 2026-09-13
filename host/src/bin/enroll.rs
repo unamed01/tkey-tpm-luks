@@ -90,7 +90,6 @@ fn enroll(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), Host
         &current_pass_len,
         "--new-keyfile=-",
         "--new-keyfile-size=32",
-        "--batch-mode",
         "--iter-time=1", // keyfile is random no point in a lots of iterations
     ];
     let mut cryptsetup = Command::new("/usr/sbin/cryptsetup")
