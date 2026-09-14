@@ -39,13 +39,11 @@ qvm-run -p "$builder" "cd /home/user/tkey-tpm-luks/host && bootdev=\"${bootD}\" 
 mkdir -p dracut/
 #these are for later
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/host/target/release/verify >verify
-qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/host/target/release/Qubes_Kill_slot >Qubes_Kill_slot
-chmod +x verify Qubes_Kill_slot
-strip verify Qubes_Kill_slot
+chmod +x verify
+strip verify
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/enroll.sh >enroll.sh
 chmod +x enroll.sh
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/qubes_enrollpt2.sh >qubes_enrollpt2.sh
-qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/qubes_KillSlot.sh >qubes_KillSlot.sh
 #get everything from builder
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/host/target/release/host >dracut/host
 qvm-run -p "$builder" cat /home/user/tkey-tpm-luks/dracut/module-setup.sh >dracut/module-setup.sh
@@ -121,13 +119,5 @@ exec -c "$PWD/verify"
 EOF
 
 chmod +x /etc/qubes-rpc/qubes.TPMProxy
-
-cat >/etc/qubes-rpc/qubes.LuksKillSlot <<EOF
-#!/usr/bin/sudo bash
-
-exec -c "$PWD/Qubes_Kill_slot"
-EOF
-
-chmod +x /etc/qubes-rpc/qubes.LuksKillSlot
 
 echo "everything went well! you must now reboot so that new PCR values are enrolled correctly, then run qubes_enrollpt2.sh."

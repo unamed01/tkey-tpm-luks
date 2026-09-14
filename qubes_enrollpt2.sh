@@ -5,7 +5,15 @@ if [[ "$EUID" != "0" ]]; then
   echo must run as root
   exit 1
 fi
-read -rp "running first time enrollment, please confirm [y/N] " ans
+if [[ -n "${2:-}" ]] && [[ "$1" == "--kill-slot" ]]; then
+  [[ "$2" -le 32 ]] || {
+    echo keyslot $2 isn\'t a valid luks keyslot number
+    exit 1
+  }
+  echo "WILL kill slot $2"
+  echo
+fi
+read -rp "running enrollment, please confirm [y/N] " ans
 [[ "$ans" =~ ^[Yy]$ ]] || {
   echo refused
   exit 1
@@ -70,4 +78,4 @@ if ! qvm-run "$disp_name" command -v "$enroll_term"; then
   exit 2
 fi
 qvm-usb attach "$disp_name" "$usb"
-qvm-run -u root "$disp_name" "$enroll_term" -x /home/user/QubesIncoming/$builder/qubes_enroll
+qvm-run -u root "$disp_name" "$enroll_term" -x /home/user/QubesIncoming/$builder/qubes_enroll "$1" "$2"

@@ -31,6 +31,6 @@ sed -i "3i \Before=${systemdsvc}" dracut/tkey-tpm-luks.service
 test -d /lib/dracut/modules.d/90tkey-tpm-luks/ && rm -rf /lib/dracut/modules.d/90tkey-tpm-luks/ || true
 rm -rf /lib/dracut/modules.d/90tkey-tpm-luks/ || true
 mkdir -p /lib/dracut/modules.d/90tkey-tpm-luks/
-cp dracut/ /lib/dracut/modules.d/90tkey-tpm-luks/ #makes module
-dracut --force --verbose                          #rebuilds initramfs
+cp -r dracut/ /lib/dracut/modules.d/90tkey-tpm-luks/ #makes module
+dracut --force --verbose                             #rebuilds initramfs
 echo "must reboot to make sure PCRs are updated (necessary since we rebuilt initramfs and tpm still has old PCR values) then run setup_part2.sh."

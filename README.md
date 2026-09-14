@@ -10,34 +10,31 @@ Secure boot lacks in compatibility (specially anything non windows), in security
 
 **Why encrypt hash and keyfile?**
 
-tkey-tpm-luks is hardware aware, whats the point in locking down boot process if all you need is to log the keyfile then encryption is meaningless. Side stepping measured boot and having a USB sniffer take keyfile/passphrase then decrypting disk later is just as good as having malware in the kernel/initramfs for this very reason we encrypt host-client communication so a sniffer would get nothing (also the reason to use randomly generated nonce). The rest (nonce, signature..etc) don't get encrypted since they're non sensitive which saves CPU precious time.
+Because tkey-tpm-luks is hardware aware. Whats the point in locking down boot process if all you need is to log the keyfile then encryption is meaningless. Side stepping measured boot and having a USB sniffer take keyfile/passphrase then decrypting disk later is just as good as having malware in the kernel/initramfs for this very reason we encrypt host-client communication so a sniffer would get nothing (also the reason to use randomly generated nonce). The rest (nonce, signature..etc) don't get encrypted since they're non sensitive which saves CPU precious time.
 
 ## Architecture
 **numbers reflect the ones below**
 ```
   TKey              Host              TPM
     |                 |                 |
-    | 1  move nonce   |                 |
+    | 1       nonce   |                 |
     |----------------------------------->
     |                 |                 |
     |                 |                 +-+ 2  checks PCRs,
     |                 |                 | |    signs nonce
     |                 |                 +-+
     | 1  X25519 key exchange            |
-    |    (in parallel)|                 |
-    <=================>                 |
+    |                 |                 |
+    <----------------->                 |
     |                 | 2  signature    |
-    |                 <-----------------|
-    |                 |                 
-    | 2  signature    |                 
-    <-----------------|                 
+    <-----------------------------------|
     |                 |                 
     |                 |                 
     +-+ 3  verify sig |                 
     | |    (baked-in pubkey)            
     +----------------->                 
     |                 |                 
-    |                 +-+ 3  hash passphrase
+    |                 +-+ 3  take passphrase and hash
     |                 | |    (Argon2id) 
     |                 +-+               
     |                 |                 
@@ -56,7 +53,7 @@ tkey-tpm-luks is hardware aware, whats the point in locking down boot process if
                       +-+               
 ```
 
-**The * means ChaCha20-encrypted over the wire**
+**The * means ChaCha20-encrypted over wire**
 
 If step 3 fails -> TPM won't sign, Tkey will flash YELLOW, Touch to move past (only meant to be used for grub,kernel or xen updates)
 
@@ -69,11 +66,11 @@ CDI: (compound device Identifier) Tkey's, way to ensure currently loaded app has
 5. host will decrypt keyfile, then use cryptsetup to unlock disk if passphrase and CDI were correct disk unlocks!
 
 
+> [!WARNING]
+> this software is made to be the least intrusive as it can be, but do make a backup before proceeding (still in beta).
 
 ## usage normal linux distros (must use dracut and use systemd)
 
-> [!WARNING]
-> this software is made to be the least intrusive as it can be, but do make a backup before proceeding (still in beta).
 
 #### **make sure you make a backup before proceeding.**
 
@@ -83,9 +80,10 @@ CDI: (compound device Identifier) Tkey's, way to ensure currently loaded app has
 
 **please open a github issue if any of this doesn't work!**
 
-Theres very easy to use setup scripts that will set everything for you
+Theres a very easy to use setup scripts that will set everything for you, just install dependencies first.
 
 ```bash
+sudo dnf install tpm2-tools llvm cargo
 sudo bash setup_part1.sh
 ```
 

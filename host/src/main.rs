@@ -40,7 +40,6 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         //first thing clientapp should do is signal its ready 4 passphrase if it does not print the error and exit
         if !matches!(status, Ok(ClientMessage::Ready4pass)) {
             eprintln!("expected Ready4pass, but instead received :");
-            dbg!(&status);
             Err(ClientError::OutOfsync)?
         }
 
