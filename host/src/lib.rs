@@ -188,9 +188,6 @@ impl Tkey {
         fcntl(&fd, FcntlArg::F_SETFL(OFlag::empty()))?;
         let baud = 62500;
         let mut tio: libc::termios2 = unsafe { std::mem::zeroed() };
-        if unsafe { libc::ioctl(fd.as_raw_fd(), libc::TCGETS2, &mut tio) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
 
         tio.c_cflag &= !libc::CBAUD;
         tio.c_cflag |= libc::BOTHER;
@@ -242,16 +239,16 @@ impl From<std::io::Error> for ClientError {
         Self::IOError(value)
     }
 }
-// helper func takes in port and gives either CLientMessage or ClientError caller chooses how to proceed.
+/// helper func takes in port and gives either CLientMessage or ClientError caller chooses how to proceed.
 pub fn check_status(port: &mut Tkey) -> Result<ClientMessage, ClientError> {
     let mut status_byte = [0u8; 1];
     port.read_exact(&mut status_byte)?;
     ClientMessage::try_from(status_byte[0])
 }
 
-// takes in nonce interfaces with TPM asks to sign nonce and gets sig back.
-// # Errors
-// when PCRs don't match or fails to communicate with TPM properly
+/// takes in nonce interfaces with TPM asks to sign nonce and gets sig back.
+/// # Errors
+/// when PCRs don't match or fails to communicate with TPM properly
 pub fn verify(ticket: [u8; 108]) -> Result<[u8; 64], Box<dyn Error>> {
     let mut ctx = Context::new(TctiNameConf::from_str("device:/dev/tpmrm0")?)?;
 
@@ -311,44 +308,10 @@ pub fn verify(ticket: [u8; 108]) -> Result<[u8; 64], Box<dyn Error>> {
     Ok(sig_bytes)
 }
 
-// WIP.
-pub fn get_key_seed() -> Result<[u8; 32], Box<dyn Error>> {
-    let mut context = Context::new(TctiNameConf::from_str("device:/dev/tpmrm0")?)?;
-
-    let session = context
-        .start_auth_session(
-            None,
-            None,
-            None,
-            SessionType::Policy,
-            SymmetricDefinition::Null,
-            HashingAlgorithm::Sha256,
-        )?
-        .ok_or("TPM returned no session")?;
-    let pcr_selection = PcrSelectionListBuilder::new()
-        .with_selection(
-            HashingAlgorithm::Sha256,
-            &[
-                PcrSlot::Slot0,
-                PcrSlot::Slot4,
-                PcrSlot::Slot8,
-                PcrSlot::Slot9,
-            ],
-        )
-        .build()?;
-    let policy_sess = PolicySession::try_from(session)?;
-    context.policy_pcr(policy_sess, Digest::default(), pcr_selection)?;
-    let tpm_handle = TpmHandle::try_from(0x8100_0002u32)?;
-    let _key_handle = context.tr_from_tpm_public(tpm_handle)?;
-
-    let seed_bytes = [0u8; 32];
-    Ok(seed_bytes)
-}
-
-//make sure argon2 is consistent accross files provides sane defaults.
-//this would only slowdown bruteforcing in a scenario where an attacker successfully extracted CDI
-//from Tkey trough a vulnerability which is extremely unlikely so parameters are kept fast for
-//better UX.
+///make sure argon2 is consistent accross files provides sane defaults.
+///this would only slowdown bruteforcing in a scenario where an attacker successfully extracted CDI
+///from Tkey trough a vulnerability which is extremely unlikely so parameters are kept fast for
+///better UX.
 pub fn get_argon2() -> Argon2<'static> {
     let params = Params::new(13107, 1, 4, None).expect("hardcoded argon2 params are wrong.");
     Argon2::new(Algorithm::Argon2id, argon2::Version::V0x13, params)
@@ -393,7 +356,7 @@ pub fn auth_with_tkey_and_tpm(
 /// loads client app onto tkey.
 ///# Errors
 ///when tkey is already on app mode
-///or binary gets corrupted on the way to tkeybinary gets corrupted on the way to tkey
+///or binary gets corrupted on the way to tkey
 pub fn load_app(tkey: &mut Tkey, bin: &[u8]) -> Result<(), Box<dyn Error>> {
     let mut hasher = Blake2s256::new();
     let bin_len: u32 = bin.len() as u32;
@@ -422,10 +385,15 @@ pub fn load_app(tkey: &mut Tkey, bin: &[u8]) -> Result<(), Box<dyn Error>> {
         frame[2..2 + bytes.len()].copy_from_slice(bytes);
         tkey.write_all(&frame)?;
         if i == total - 1 {
+            //make sure that the baud rate is fully exhausted on the happy :) path
+            //ensures we're not blocking on read_exact for each iteration
+            //which shaves off an entire second for a 74kb binary.
+            //uses expected length to check whether binary was sent successfully
+            //if anything goes wrong here should also be caught by hashing at the end.
             let expected = (total - 1) as i32 * 5;
             let mut num: libc::c_int = 0;
             let mut passes = 0;
-            while num != expected {
+            while num < expected {
                 if passes < 70 {
                     passes += 1;
                 } else {

@@ -121,7 +121,8 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
         _ => Err(HostErr::UnknownError)?,
     }
     if !kill_slot {
-        stdin.write_all(&[0x0u8])?;
+        //0x91 is pretty arbritrary but its pretty clear that it means "do nothing"
+        stdin.write_all(&[0x91u8])?;
         stdin.flush()?;
     } else {
         stdin.write_all(&[slot_to_kill.unwrap()])?;

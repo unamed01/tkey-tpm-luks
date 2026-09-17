@@ -7,7 +7,7 @@ if [[ "$EUID" != "0" ]]; then
 fi
 if [[ -n "${2:-}" ]] && [[ "$1" == "--kill-slot" ]]; then
   [[ "$2" -le 32 ]] || {
-    echo keyslot $2 isn\'t a valid luks keyslot number
+    echo keyslot "$2" isn\'t a valid luks keyslot number
     exit 1
   }
   echo "WILL kill slot $2"
@@ -18,7 +18,7 @@ read -rp "running enrollment, please confirm [y/N] " ans
   echo refused
   exit 1
 }
-disp_template=$(qubes-prefs default_dispvm)
+disp_template="$(qubes-prefs default_dispvm)"
 disp_name="tkey-enroll"
 builder="tkey-builder" #change this if your vm name is different..
 bootD="$(findmnt -no SOURCE /boot)"
@@ -78,4 +78,5 @@ if ! qvm-run "$disp_name" command -v "$enroll_term"; then
   exit 2
 fi
 qvm-usb attach "$disp_name" "$usb"
-qvm-run -u root "$disp_name" "$enroll_term" -x /home/user/QubesIncoming/$builder/qubes_enroll "$1" "$2"
+qvm-run -u root "$disp_name" "$enroll_term" -x /home/user/QubesIncoming/$builder/qubes_enroll "$1" "$2" &
+tail -n 0 -f /root/tkey-files/verify.log

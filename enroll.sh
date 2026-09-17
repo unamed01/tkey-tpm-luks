@@ -5,8 +5,8 @@ set -euo pipefail
 
 PCR_BANK="sha256"
 PCR_LIST="0,4,8,9"
-TPM_HANDLE="${TPM_HANDLE:-0x81000001}"
-PUBKEY_OUT="${PUBKEY_OUT:-./tpm_pubkey_raw.bin}"
+TPM_HANDLE="0x81000001"
+PUBKEY_OUT="./tpm_pubkey_raw.bin"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"; tpm2_flushcontext -t 2>/dev/null || true' EXIT

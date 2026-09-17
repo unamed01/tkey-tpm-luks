@@ -92,7 +92,8 @@ fn enroll() -> Result<(), HostErr> {
         stdout().flush()?;
         let mut num = [0u8; 1];
         io::stdin().read_exact(&mut num)?;
-        if num[0] != 0x0 {
+        //0x99 means do nothing (pretty arbritrary but works )
+        if num[0] != 0x99u8 {
             kill_slot(*keyfile, num[0])
         } else {
             Ok(())
