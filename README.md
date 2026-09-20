@@ -6,11 +6,12 @@ luks2 + Tillitis Tkey, hardware aware Full Disk Encryption and measured boot sol
 
 **Secure boot's flaws:**
 
-Secure boot lacks in compatibility (specially anything non windows), in security (rogue CA, downgrade attacks..etc) and microsoft helped make it. This solution tries to fix security problems for a subset of underserved systems (QubesOS/linux for now) uses a TPM 2.0 to implement measured boot + luks2 drive decryption built in, using [Tkey](https://www.tillitis.se/)  physical security key which measures the system's state alongside TPM and allowing for secure luks2 keyfile derivation for disk unlocking. A lot more secure since for each disk unlock the entire boot chain must match byte per byte what it was at enrollment which entirely fixes the possibility of a downgrade attack since there is no signature attached only a hash that gets checked by TPM if it doesn't match its instantly evident to the user which user can deal with accordingly.
+Secure boot lacks in compatibility (specially anything non windows), in security (rogue CA, downgrade attacks..etc) and microsoft helped make it. This solution tries to fix security problems for a subset of underserved systems (QubesOS/linux for now) uses a TPM 2.0 to implement measured boot + luks2 drive decryption built in, using [Tkey](https://www.tillitis.se/)  physical security key making it cryptographically impossible to unlock disk without exact same bootchain being presented to TPM or user affirming they're aware bootchain is different. By measures the system's state with TPM, allowing for secure luks2 keyfile derivation for disk unlocking. A lot more secure since for each disk unlock the entire boot chain must match byte per byte what it was at enrollment which entirely fixes the possibility of a downgrade attack since there is no signature attached only a hash that gets checked by TPM if it doesn't match its instantly evident to the user which user can deal with accordingly.
+And Tkey app enforces rate limiting of 3 tries every ~23 seconds trough hardware, which is horribly slow brute forcing.
 
 **Why encrypt hash and keyfile?**
 
-Because tkey-tpm-luks is hardware aware. Whats the point in locking down boot process if all you need is to log the keyfile then encryption is meaningless. Side stepping measured boot and having a USB sniffer take keyfile/passphrase then decrypting disk later is just as good as having malware in the kernel/initramfs for this very reason we encrypt host-client communication so a sniffer would get nothing (also the reason to use randomly generated nonce). The rest (nonce, signature..etc) don't get encrypted since they're non sensitive which saves CPU precious time.
+Because tkey-tpm-luks is hardware aware. Whats the point in locking down boot process if all you need is to log the keyfile? Having a USB sniffer take keyfile and passphrase then decrypting disk later is just as good as having malware in the kernel/initramfs for this very reason we encrypt host-client communication so a sniffer would get nothing (also the reason to use randomly generated nonce). The rest (nonce, signature..etc) don't get encrypted since they're non sensitive which saves CPU precious time.
 
 ## Architecture
 **numbers reflect the ones below**
@@ -67,7 +68,7 @@ CDI: (compound device Identifier) Tkey's, way to ensure currently loaded app has
 
 
 > [!WARNING]
-> this software is made to be the least intrusive as it can be, but do make a backup before proceeding (still in beta).
+> this software is made to be the least intrusive as it can be, but do make a backup before proceeding since its still in beta.
 
 ## usage normal linux distros (must use dracut and use systemd)
 
