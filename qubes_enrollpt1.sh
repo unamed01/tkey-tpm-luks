@@ -60,9 +60,6 @@ if ! grep 'rd.qubes.dom0_usb' /etc/default/grub &>/dev/null; then
   usbController="$(lspci | grep -i 'usb controller' | awk '{print $1}' | tr '\n' ',')"
   sed -i '/rd\.qubes\.hide_all_usb/ s/"$/ rd\.qubes\.dom0_usb='"$usbController"'"/' /etc/default/grub
 fi
-# Backup first
-test -f /boot/efi/EFI/BOOT/BOOTX64.EFI.bak || cp /boot/efi/EFI/BOOT/BOOTX64.EFI /boot/efi/EFI/BOOT/BOOTX64.EFI.bak
-test -f /boot/efi/EFI/qubes/grubx64.efi.bak || cp /boot/efi/EFI/qubes/grubx64.efi /boot/efi/EFI/qubes/grubx64.efi.bak
 #ensure deterministic PCR 8,9 generation (see issue below)
 #https://github.com/fedora-silverblue/issue-tracker/issues/285
 systemctl --global mask grub-boot-success.timer
