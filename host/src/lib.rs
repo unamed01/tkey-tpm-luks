@@ -1,7 +1,7 @@
-use argon2::{Algorithm, Argon2, Params};
 //main lib which provides all relevant types needed for functioning plus verify() func its split
 //into one into some in client and some in host to make sure client doesnt need to pull #[derive(Debug)]
 //which increase binary size by a lot.
+use argon2::{Algorithm, Argon2, Params};
 use blake2::{Blake2s256, Digest as BlakeDigest};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::error::Error;
@@ -188,6 +188,9 @@ impl Tkey {
         fcntl(&fd, FcntlArg::F_SETFL(OFlag::empty()))?;
         let baud = 62500;
         let mut tio: libc::termios2 = unsafe { std::mem::zeroed() };
+        if unsafe { libc::ioctl(fd.as_raw_fd(), libc::TCGETS2, &mut tio) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
 
         tio.c_cflag &= !libc::CBAUD;
         tio.c_cflag |= libc::BOTHER;

@@ -104,14 +104,15 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
         _ => Err(ClientError::OutOfsync)?,
     };
     pass_enroll(&mut tkey, &mut cipher)?;
-    let mut encrypted_keyfile = [0u8; 32];
-    tkey.read_exact(&mut encrypted_keyfile)?;
-    let mut keyfile = [0u8; 32];
-    let current_passphrase = rpassword::prompt_password("input current luks Password>")?;
+    let mut encrypted_keyfile: Zeroizing<[u8; 32]> = [0u8; 32].into();
+    tkey.read_exact(&mut *encrypted_keyfile)?;
+    let mut keyfile: Zeroizing<[u8; 32]> = [0u8; 32].into();
+    let current_passphrase: Zeroizing<String> =
+        rpassword::prompt_password("input current luks Password>")?.into();
     stdin.write_all(&[current_passphrase.len() as u8])?;
     stdin.write_all(current_passphrase.as_bytes())?;
-    cipher.apply_keystream_b2b(&encrypted_keyfile, &mut keyfile);
-    stdin.write_all(&keyfile)?;
+    cipher.apply_keystream_b2b(&*encrypted_keyfile, &mut *keyfile);
+    stdin.write_all(&*keyfile)?;
     stdin.flush()?;
     let mut b = [0u8; 1];
     stdout.read_exact(&mut b)?;
