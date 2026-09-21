@@ -62,7 +62,7 @@ fn pass_enroll(
         eprintln!("ERR: failed to hash passphrase");
         eprintln!("this shouldn't happen, please report this issue.");
         eprintln!("{e}");
-        Err("{e}")?;
+        Err(format!("{e}"))?;
     }
     cipher.apply_keystream(&mut password_hash);
     tkey.write_all(&password_hash)?;

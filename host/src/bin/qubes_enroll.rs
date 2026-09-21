@@ -35,12 +35,12 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
 fn run() -> Result<ExitCode, Box<dyn Error>> {
     let argv: Vec<String> = std::env::args().collect();
     let kill_slot = argv.len() == 3 && argv[1] == "--kill-slot";
-    let slot_to_kill: Option<u8> = if argv.len() == 3 {
+    let slot_to_kill: Option<u8> = if kill_slot {
         let num = match argv[2].parse() {
             Ok(s) => s,
             Err(_) => Err("ERR:didn't get a integer from argv")?,
         };
-        if num > 32 {
+        if num >= 32 {
             Err("not a valid luks2 keyslot, number > 32.")?;
         }
         println!("will kill slot number: {num}!");
@@ -165,7 +165,7 @@ fn pass_enroll(
         eprintln!("ERR: failed to hash passphrase");
         eprintln!("this shouldn't happen, please report this issue.");
         eprintln!("{e}");
-        return Err("{e}".into());
+        Err(format!("{e}"))?;
     }
     cipher.apply_keystream(&mut hashed_pass);
     tkey.write_all(&hashed_pass)?;
