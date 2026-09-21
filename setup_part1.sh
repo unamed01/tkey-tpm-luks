@@ -23,7 +23,7 @@ if ! test -f client/clientApp; then
   head -c 8 /dev/urandom >client/clientApp
 fi
 cd host/
-bootdev="${bootD}" luksdev="${luksdev}" luksUUID="${luksUUID}" sudo -Eu $SUDO_USER cargo build --release
+bootdev="${bootD}" luksdev="${luksdev}" luksUUID="${luksUUID}" sudo -Eu "$SUDO_USER" cargo build --release
 cp target/release/host ../dracut/host
 strip ../dracut/host
 cd ..

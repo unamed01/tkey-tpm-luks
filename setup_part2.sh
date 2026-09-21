@@ -6,22 +6,22 @@ if [[ "$EUID" != "0" ]]; then
   echo must be root to run setup_part2
   exit 1
 fi
-if [[ ! -c /dev/ttyACM0 ]]; then
+if ! [[ -c /dev/ttyACM0 ]]; then
   echo make sure tkey is plugged in before running setup_part2
   exit 2
 fi
-export bootdev="$(findmnt -n -o SOURCE /boot)"
-export luksdev="/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)")" || true
-export luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
+bootdev="$(findmnt -n -o SOURCE /boot)"
+luksdev="/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)")" || true
+luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
 if ! cryptsetup isLuks "$luksdev"; then
   echo "$luksdev is NOT a luks device change \$luksD on this script to your correct disk before proceeding."
   exit 1
 fi
 bash enroll.sh
 cd client/
-sudo -u $SUDO_USER cargo build --release
-sudo -u $SUDO_USER llvm-objcopy --input-target=elf32-littleriscv --output-target=binary target/riscv32i-unknown-none-elf/release/client clientApp
+sudo -u "$SUDO_USER" cargo build --release
+sudo -u "$SUDO_USER" llvm-objcopy --input-target=elf32-littleriscv --output-target=binary target/riscv32i-unknown-none-elf/release/client clientApp
 cp -r clientApp /boot/client
 cd ../host
-bootdev="$bootdev" luksdev="$luksdev" luksUUID="$luksUUID" sudo -Eu $SUDO_USER cargo build --release #make sure its built with correct bin
+bootdev="$bootdev" luksdev="$luksdev" luksUUID="$luksUUID" sudo -Eu "$SUDO_USER" cargo build --release #make sure its built with correct bin
 target/release/enroll

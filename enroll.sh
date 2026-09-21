@@ -1,4 +1,4 @@
-#!/usr/bin/env bash --
+#!/usr/bin/env bash
 # Creates a P-256 ECDSA signing key in the TPM, and exports pubkey
 
 set -euo pipefail
