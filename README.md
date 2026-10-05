@@ -84,7 +84,8 @@ CDI: (compound device Identifier) Tkey's, way to ensure currently loaded app has
 Theres a very easy to use setup scripts that will set everything for you, just install dependencies first.
 
 ```bash
-sudo dnf install tpm2-tools llvm cargo
+sudo dnf install tpm2-tools llvm rustup
+rustup default stable #client bin is nightly which will auto download
 sudo bash setup_part1.sh
 ```
 
@@ -114,9 +115,8 @@ sudo bash setup_part2.sh
 Firstly make a fully new builder Qube clone this repo and audit the code inside it. And install deps
 ```bash
 sudo apt install llvm rustup libtss2-dev gcc libudev-dev
-sudo apt install qubes-usb-proxy #if using minimal
-rustup default stable 
-rustup target add riscv32i-unknown-none-elf
+sudo apt install qubes-usb-proxy #only needed if using minimal
+rustup default stable #client is nightly which will auto download
 git clone https://github.com/unamed01/tkey-tpm-luks.git
 ```
 
