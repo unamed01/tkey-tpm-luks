@@ -9,8 +9,12 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+const CRYPTSETUP: &str = "/usr/sbin/cryptsetup";
 //this is the code that actually gets run in dom0.
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let mut enrolled_byte = [0u8; 1];
+    std::io::stdin().read_exact(&mut enrolled_byte)?;
+    let ennrolled = enrolled_byte[0] == 0;
     let mut challange = [0u8; 108];
     std::io::stdin().read_exact(&mut challange)?;
     let mut f = fs::File::create("/root/tkey-files/verify.log")?;
@@ -31,27 +35,37 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
             stdout().flush()?;
         }
     };
-    enroll()?;
+    if ennrolled {
+        enroll(Some(get_current_keyfile()?))?;
+    } else {
+        enroll(None)?;
+    };
     writeln!(f, "success!")?;
     Ok(ExitCode::SUCCESS)
 }
 
-fn enroll() -> Result<(), HostErr> {
-    //this below makes sure that we can realiably write the correct passphrase onto cryptsetup for
-    //decryption using stdin only.
-    let mut current_pass_bytes: Zeroizing<[u8; 256]> = [0u8; 256].into();
-    let mut current_pass_bytes_len: Zeroizing<[u8; 1]> = [0u8; 1].into();
-    stdin().read_exact(&mut *current_pass_bytes_len)?;
-    stdin().read_exact(&mut current_pass_bytes[..current_pass_bytes_len[0] as usize])?;
+fn enroll(get_current_keyfile: Option<[u8; 32]>) -> Result<(), HostErr> {
+    let got_current_keyfile = get_current_keyfile.is_some();
+    let (current_pass_len, current_pass) = if !got_current_keyfile {
+        //this below makes sure that we can realiably write the correct passphrase onto cryptsetup for
+        //decryption using stdin only.
+        let mut current_pass_bytes: Zeroizing<[u8; 256]> = [0u8; 256].into();
+        let mut current_pass_bytes_len: Zeroizing<[u8; 1]> = [0u8; 1].into();
+        stdin().read_exact(&mut *current_pass_bytes_len)?;
+        stdin().read_exact(&mut current_pass_bytes[..current_pass_bytes_len[0] as usize])?;
 
-    let current_pass: Zeroizing<String> = match String::from_utf8(
-        current_pass_bytes[..current_pass_bytes_len[0] as usize].to_vec(),
-    ) {
-        Ok(k) => k,
-        Err(_) => Err(HostErr::StringParseError)?,
-    }
-    .into();
-    let current_pass_len: Zeroizing<String> = current_pass.len().to_string().into();
+        let current_pass: Zeroizing<String> = match String::from_utf8(
+            current_pass_bytes[..current_pass_bytes_len[0] as usize].to_vec(),
+        ) {
+            Ok(k) => k,
+            Err(_) => Err(HostErr::StringParseError)?,
+        }
+        .into();
+        let current_pass_len: Zeroizing<String> = current_pass.len().to_string().into();
+        (Some(current_pass_len), Some(current_pass))
+    } else {
+        (None, None)
+    };
 
     let args = &[
         "luksAddKey",
@@ -59,12 +73,18 @@ fn enroll() -> Result<(), HostErr> {
         "--batch-mode",
         "--key-file=-",
         "--keyfile-size",
-        &current_pass_len,
+        if got_current_keyfile {
+            "32"
+        } else {
+            //got password
+            &current_pass_len.unwrap()
+        },
+        //checked above so unwrap is fine.
         "--new-keyfile=-",
         "--new-keyfile-size=32",
         "--iter-time=1", // keyfile is random no point in a lots of iterations
     ];
-    let mut cryptsetup = Command::new("/usr/sbin/cryptsetup")
+    let mut cryptsetup = Command::new(CRYPTSETUP)
         .args(args)
         .stdin(Stdio::piped())
         .spawn()?;
@@ -75,13 +95,18 @@ fn enroll() -> Result<(), HostErr> {
         }
     };
     //writes current passphrase
-    stdin.write_all(current_pass.as_bytes())?;
-    //takes keyfile from tkey from vm then sends over to cryptsetup
+    match get_current_keyfile {
+        Some(get_current_keyfile) => {
+            stdin.write_all(&get_current_keyfile)?;
+        }
+        None => {
+            stdin.write_all(current_pass.unwrap().as_bytes())?;
+        }
+    };
     let mut keyfile: Zeroizing<[u8; 32]> = [0u8; 32].into();
-    {
-        io::stdin().read_exact(&mut *keyfile)?;
-        stdin.write_all(&*keyfile)?;
-    }
+    io::stdin().read_exact(&mut *keyfile)?;
+    stdin.write_all(&*keyfile)?;
+    stdin.flush()?;
     //extract status code (.code() should only fail if process is killed which is unlikely)
     let status_code = match cryptsetup.wait()?.code() {
         Some(s) => s,
@@ -92,7 +117,7 @@ fn enroll() -> Result<(), HostErr> {
         stdout().flush()?;
         let mut num = [0u8; 1];
         io::stdin().read_exact(&mut num)?;
-        //0x99 means do nothing (pretty arbritrary but works )
+        //0x91 means do nothing (pretty arbritrary but works )
         if num[0] != 0x91u8 {
             kill_slot(*keyfile, num[0])
         } else {
@@ -102,6 +127,7 @@ fn enroll() -> Result<(), HostErr> {
         Err(HostErr::CryptsetupErr)
     }
 }
+
 fn kill_slot(keyfile: [u8; 32], slot: u8) -> Result<(), HostErr> {
     let args = &[
         "luksKillSlot",
@@ -112,7 +138,7 @@ fn kill_slot(keyfile: [u8; 32], slot: u8) -> Result<(), HostErr> {
         host::ENCRYPTEDDISK,
         &slot.to_string(),
     ];
-    let mut cryptsetup = Command::new("/usr/sbin/cryptsetup")
+    let mut cryptsetup = Command::new(CRYPTSETUP)
         .args(args)
         .stdin(Stdio::piped())
         .spawn()?;
@@ -129,5 +155,33 @@ fn kill_slot(keyfile: [u8; 32], slot: u8) -> Result<(), HostErr> {
         Ok(())
     } else {
         Err(HostErr::CryptsetupKilled)?
+    }
+}
+fn get_current_keyfile() -> Result<[u8; 32], HostErr> {
+    let args = &[
+        "luksOpen",
+        "--batch-mode",
+        "--test-passphrase",
+        "--key-file=-",
+        "--keyfile-size=32",
+        host::ENCRYPTEDDISK,
+    ];
+    let mut keyfile = [0u8; 32];
+    stdin().read_exact(&mut keyfile)?;
+    let mut cryptsetup = Command::new(CRYPTSETUP)
+        .args(args)
+        .stdin(Stdio::piped())
+        .spawn()?;
+    let mut crypt_stdin = match cryptsetup.stdin.take() {
+        Some(s) => s,
+        None => {
+            return Err(HostErr::PipeError);
+        }
+    };
+    crypt_stdin.write_all(&keyfile)?;
+    if cryptsetup.wait()?.success() {
+        Ok(keyfile)
+    } else {
+        Err(HostErr::DecryptionError)
     }
 }

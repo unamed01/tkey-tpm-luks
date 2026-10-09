@@ -89,9 +89,9 @@ fn ask_for_password(
         "tpm REFUSED to unseal, system might be tampered with. Input password at your own risk."
     };
     let pass = Command::new("/usr/bin/systemd-ask-password")
+        .arg("--timeout=0")
         .arg(prompt)
         .output()?;
-
     let mut passphrase_bytes = pass.stdout;
     let mut pass_len = passphrase_bytes.len();
     if pass_len < 9 {

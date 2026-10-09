@@ -173,7 +173,13 @@ pub struct Tkey {
 }
 impl Tkey {
     pub fn new() -> Result<Tkey, Box<dyn Error>> {
-        let path = Path::new("/dev/ttyACM0");
+        let mut path = Path::new("/dev/ttyACM0");
+        if !path.exists() {
+            path = Path::new("/dev/ttyACM1");
+            if !path.exists() {
+                Err("tkey isn't plugged in.")?;
+            }
+        }
         let fd = nix::fcntl::open(
             path,
             OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,

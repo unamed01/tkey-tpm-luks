@@ -13,19 +13,8 @@ if [[ -n "${2:-}" ]] && [[ "${1:-}" == "--kill-slot" ]]; then
   echo "WILL kill slot $2"
   echo
 fi
-read -rp "running enrollment, please confirm [y/N] " ans
-[[ "$ans" =~ ^[Yy]$ ]] || {
-  echo refused
-  exit 1
-}
-disp_template="$(qubes-prefs default_dispvm)"
-disp_name="tkey-enroll"
-builder="tkey-builder" #change this if your vm name is different..
-bootD="$(findmnt -no SOURCE /boot)"
-luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
+
 luksD="/dev/nvme0n1p3" #change here if you didn't use auto partitioning.
-# if you change this make sure to also change last command to make sure it can execute the bin directly like xfce4-terminal can.
-enroll_term="xfce4-terminal"
 
 if ! cryptsetup isLuks "$luksD"; then
   echo "$luksD is NOT a luks device change \$luksD on this script to your correct disk before proceeding."
@@ -37,6 +26,20 @@ if test -z "$usb"; then
   echo Tkey not plugged in, must be plugged in for enrollment.
   exit 1
 fi
+
+read -rp "running enrollment, please confirm [y/N] " ans
+[[ "$ans" =~ ^[Yy]$ ]] || {
+  echo refused
+  exit 1
+}
+disp_template="$(qubes-prefs default_dispvm)"
+disp_name="tkey-enroll"
+builder="tkey-builder" #change this if your vm name is different..
+bootD="$(findmnt -no SOURCE /boot)"
+luksUUID="$(cat /etc/crypttab | awk '{print $1}')"
+# if you change this make sure to also change last command to make sure it can execute the bin directly like xfce4-terminal can.
+enroll_term="xfce4-terminal"
+
 mkdir -p ~/tkey-files && cd ~/tkey-files #make sure were on the right dir
 #cleanup policy on exit
 trap 'rm -f /etc/qubes/policy.d/20-tkey-tpm-luks.policy' EXIT
@@ -48,8 +51,6 @@ if ! test -f enroll.sh; then
   exit 3
 fi
 
-bash enroll.sh
-
 if ! qvm-prefs "$disp_name" &>/dev/null; then
   qvm-create --class DispVM --label red --property netvm='' -t "$disp_template" "$disp_name"
 else
@@ -57,17 +58,16 @@ else
   qvm-start "$disp_name" &
 fi
 
+bash enroll.sh
+
 qvm-run "$builder" "rm /home/user/QubesIncoming/dom0/tpm_pubkey_raw.bin" || true
 qvm-copy-to-vm "$builder" "tpm_pubkey_raw.bin"
 qvm-run "$builder" mv /home/user/QubesIncoming/dom0/tpm_pubkey_raw.bin /home/user/tkey-tpm-luks/tpm_pubkey_raw.bin
 qvm-run -p "$builder" 'cd /home/user/tkey-tpm-luks/client/ && cargo build --release && llvm-objcopy --input-target=elf32-littleriscv --output-target=binary target/riscv32i-unknown-none-elf/release/client clientApp '
-if [[ -f /boot/client ]]; then
-  mv /boot/client /boot/client.old
-fi
-qvm-run -p "$builder" 'cat /home/user/tkey-tpm-luks/client/clientApp ' >/boot/client
 echo "type to to copy to $disp_name (copying qubes_enroll)"
+qvm-run -p "$builder" "cd /home/user/tkey-tpm-luks/host && bootdev=\"${bootD}\" luksdev=\"${luksD}\" luksUUID=\"${luksUUID}\" cargo build --release"
 notify-send "qubes_enrollpt2" "type to to copy to $disp_name (copying qubes_enroll)"
-qvm-run -p "$builder" "cd /home/user/tkey-tpm-luks/host && bootdev=\"${bootD}\" luksdev=\"${luksD}\" luksUUID=\"${luksUUID}\" cargo build --release && qvm-copy target/release/qubes_enroll"
+qvm-run -p "$builder" "qvm-copy target/release/qubes_enroll"
 #allow disp to run verify bin with qrexec svc we setup in part1
 cat >/etc/qubes/policy.d/20-tkey-tpm-luks.policy <<EOF
 qubes.TPMProxy * $disp_name dom0 allow
@@ -78,4 +78,12 @@ if ! qvm-run "$disp_name" command -v "$enroll_term"; then
   exit 2
 fi
 qvm-usb attach "$disp_name" "$usb"
-qvm-run -u root "$disp_name" "$enroll_term" -x /home/user/QubesIncoming/$builder/qubes_enroll "${1:-}" "${2:-}"
+if ! [[ -f /boot/client ]] && [[ "${3:-}" == "--enrolled" ]]; then
+  echo couldn\'t find current client binary, are you sure were enrolled?
+  exit 3
+elif [[ -f /boot/client ]]; then
+  qvm-copy-to-vm "$disp_name" /boot/clie
+fi
+qvm-run -u root "$disp_name" "$enroll_term" -x /home/user/QubesIncoming/"$builder"/qubes_enroll "${1:-}" "${2:-}" "${3:-}"
+mv /boot/client /boot/client.old || true
+qvm-run -p "$builder" 'cat /home/user/tkey-tpm-luks/client/clientApp ' >/boot/client

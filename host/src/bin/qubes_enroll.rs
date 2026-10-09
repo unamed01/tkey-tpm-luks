@@ -6,7 +6,9 @@
 use chacha20::cipher::stream::StreamCipher;
 use host::{ClientError, ClientMessage, HostErr, HostMessage, Tkey, check_status, load_app};
 use std::error::Error;
+use std::fs;
 use std::io::Write;
+use std::path::Path;
 use std::process::ExitCode;
 use std::{
     io::Read,
@@ -35,6 +37,12 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
 fn run() -> Result<ExitCode, Box<dyn Error>> {
     let argv: Vec<String> = std::env::args().collect();
     let kill_slot = argv.len() == 3 && argv[1] == "--kill-slot";
+    let currently_enrolled = argv.len() == 4 && argv[3] == "--enrolled" || argv[1] == "--enrolled";
+    let current_keyfile = if currently_enrolled {
+        Some(get_current_keyfile()?)
+    } else {
+        None
+    };
     let slot_to_kill: Option<u8> = if kill_slot {
         let num = match argv[2].parse() {
             Ok(s) => s,
@@ -43,7 +51,7 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
         if num >= 32 {
             Err("not a valid luks2 keyslot, number > 32.")?;
         }
-        println!("will kill slot number: {num}!");
+        println!("will kill slot number: {num}!\n");
         Some(num)
     } else {
         None
@@ -65,6 +73,13 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     let mut stdin = qrexec.stdin.take().expect("failed to take qrexec stdin");
     let mut stdout = qrexec.stdout.take().expect("failed to take qrexec stdout");
     let (mut cipher, challange) = host::get_chacha20_cipher(&mut tkey, nonce)?;
+    //0 promises we'lll send currently enrolled keyfile
+    // sends passphrase to tkey instead and sends keyfile to
+    if currently_enrolled {
+        stdin.write_all(&[0])?;
+    } else {
+        stdin.write_all(&[99])?;
+    }
     stdin.write_all(&challange)?;
     stdin.flush()?;
     let mut b = [0u8];
@@ -107,22 +122,28 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     let mut encrypted_keyfile: Zeroizing<[u8; 32]> = [0u8; 32].into();
     tkey.read_exact(&mut *encrypted_keyfile)?;
     let mut keyfile: Zeroizing<[u8; 32]> = [0u8; 32].into();
-    let current_passphrase: Zeroizing<String> =
-        rpassword::prompt_password("input current luks Password>")?.into();
-    stdin.write_all(&[current_passphrase.len() as u8])?;
-    stdin.write_all(current_passphrase.as_bytes())?;
     cipher.apply_keystream_b2b(&*encrypted_keyfile, &mut *keyfile);
-    stdin.write_all(&*keyfile)?;
-    stdin.flush()?;
+    if currently_enrolled {
+        stdin.write_all(&current_keyfile.unwrap())?;
+        stdin.write_all(&*keyfile)?;
+        stdin.flush()?;
+    } else {
+        let current_passphrase: Zeroizing<String> =
+            rpassword::prompt_password("input current luks Password>")?.into();
+        stdin.write_all(&[current_passphrase.len() as u8])?;
+        stdin.write_all(current_passphrase.as_bytes())?;
+        stdin.write_all(&*keyfile)?;
+        stdin.flush()?;
+    }
     let mut b = [0u8; 1];
     stdout.read_exact(&mut b)?;
     match HostMessage::try_from(b[0]) {
-        Ok(HostMessage::DecryptionSuccess) => println!("successful enrollment!"),
+        Ok(HostMessage::DecryptionSuccess) => {}
         Err(e) => Err(e)?,
         _ => Err(HostErr::UnknownError)?,
     }
     if !kill_slot {
-        //0x91 is pretty arbritrary but its pretty clear that it means "do nothing"
+        //0x91 is pretty arbritrary but means do nothing
         stdin.write_all(&[0x91u8])?;
         stdin.flush()?;
     } else {
@@ -177,5 +198,52 @@ fn pass_enroll(
         }
         Err(e) => Err(e)?,
         _ => Err(ClientError::OutOfsync)?,
+    }
+}
+fn get_current_keyfile() -> Result<[u8; 32], Box<dyn Error>> {
+    let mut client_file = fs::File::open("/home/user/QubesIncoming/dom0/client")?;
+    let mut tkey = Tkey::new()?;
+    let mut client_bytes = vec![];
+    client_file.read_to_end(&mut client_bytes)?;
+    load_app(&mut tkey, &client_bytes)?;
+    let mut nonce = [0u8; 32];
+    tkey.read_exact(&mut nonce)?;
+    let (mut cipher, _challange) = host::get_chacha20_cipher(&mut tkey, nonce)?;
+    tkey.write_all(&[HostErr::TpmRefusedToSign as u8])?;
+    let mut b = [0u8; 2];
+    tkey.read_exact(&mut b)?;
+    match ClientMessage::try_from(b[0]) {
+        Err(ClientError::InvalidSig) => {}
+        Err(e) => Err(e)?,
+        _ => Err(ClientError::OutOfsync)?,
+    }
+    match ClientMessage::try_from(b[1]) {
+        Ok(ClientMessage::Ready4pass) => {}
+        Err(e) => Err(e)?,
+        _ => Err(ClientError::OutOfsync)?,
+    }
+    let password: Zeroizing<String> =
+        rpassword::prompt_password("enter currently enrolled password >")?.into();
+    let argon2 = host::get_argon2();
+    let mut hashed_pass = [0u8; 32];
+    if let Err(e) = argon2.hash_password_into(password.as_bytes(), host::SALT, &mut hashed_pass) {
+        eprintln!("ERR: failed to hash passphrase");
+        eprintln!("this shouldn't happen, please report this issue.");
+        eprintln!("ERR:{e}");
+        Err(format!("{e}"))?;
+    }
+    let mut encrypted_buf = [0u8; 32];
+    cipher.apply_keystream_b2b(&hashed_pass, &mut encrypted_buf);
+    tkey.write_all(&encrypted_buf)?;
+    let mut keyfile = [0u8; 32];
+    tkey.read_exact(&mut keyfile)?;
+    loop {
+        println!("\nplease UNPLUG Tkey and replug it back in to continue.");
+        println!("press enter once you've done so.");
+        let mut string = String::new();
+        std::io::stdin().read_line(&mut string)?;
+        if Path::new("/dev/ttyACM0").exists() {
+            return Ok(keyfile);
+        }
     }
 }
