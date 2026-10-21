@@ -9,42 +9,36 @@ use std::error::Error;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::ExitCode;
+use std::process::{ChildStdin, ChildStdout};
 use std::{
     io::Read,
     process::{Command, Stdio},
 };
 use zeroize::{Zeroize, Zeroizing};
-fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let code = match run() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("ERR: {e}\n");
-            eprintln!("\nfailed to enroll, please try again.");
-            eprintln!("open a issue, if this issue persists.");
-            println!("press enter to exit.");
-            let mut str = String::new();
-            std::io::stdin().read_line(&mut str)?;
-            return Err(e);
-        }
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(e) = run() {
+        eprintln!("ERR: {e}\n");
+        eprintln!("\nfailed to enroll, please try again.");
+        eprintln!("open a issue, if this issue persists.");
+        println!("press enter to exit.");
+        let mut str = String::new();
+        std::io::stdin().read_line(&mut str)?;
+        return Err(e);
     };
     println!("\nsuccessfully enrolled keyslot with tkey reboot and everything should work!");
     println!("press enter to exit.");
     let mut str = String::new();
     std::io::stdin().read_line(&mut str)?;
-    Ok(code)
+    Ok(())
 }
-fn run() -> Result<ExitCode, Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error>> {
     let argv: Vec<String> = std::env::args().collect();
-    let kill_slot = argv.len() == 3 && argv[1] == "--kill-slot";
-    let currently_enrolled = argv.len() == 4 && argv[3] == "--enrolled" || argv[1] == "--enrolled";
-    let current_keyfile = if currently_enrolled {
-        Some(get_current_keyfile()?)
-    } else {
-        None
-    };
-    let slot_to_kill: Option<u8> = if kill_slot {
-        let num = match argv[2].parse() {
+    let kill_slot = argv.iter().position(|k| k == "--kill-slot");
+    let will_kill_slot = kill_slot.is_some();
+    let currently_enrolled = argv.iter().any(|s| s == "--enrolled");
+    let slot_to_kill: Option<u8> = if will_kill_slot {
+        let arg_num = kill_slot.unwrap();
+        let num = match argv[arg_num + 1].parse() {
             Ok(s) => s,
             Err(_) => Err("ERR:didn't get a integer from argv")?,
         };
@@ -56,15 +50,11 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     } else {
         None
     };
-    let mut tkey = Tkey::new()?;
     //makes it easier rather than having to copy multiple files pretty nice QOL but its not perfect
     let bin = include_bytes!("../../../client/clientApp");
     if bin.len() < 1000 {
         Err("did you recompile before passing onto dispVM?")?
     }
-    load_app(&mut tkey, bin)?;
-    let mut nonce = [0u8; 32];
-    tkey.read_exact(&mut nonce)?;
     let mut qrexec = Command::new("/usr/bin/qrexec-client-vm")
         .args(["dom0", "qubes.TPMProxy"])
         .stdin(Stdio::piped())
@@ -72,14 +62,19 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
         .spawn()?;
     let mut stdin = qrexec.stdin.take().expect("failed to take qrexec stdin");
     let mut stdout = qrexec.stdout.take().expect("failed to take qrexec stdout");
-    let (mut cipher, challange) = host::get_chacha20_cipher(&mut tkey, nonce)?;
-    //0 promises we'lll send currently enrolled keyfile
-    // sends passphrase to tkey instead and sends keyfile to
     if currently_enrolled {
         stdin.write_all(&[0])?;
+        stdin.flush()?;
+        get_current_keyfile(&mut stdin, &mut stdout)?;
     } else {
         stdin.write_all(&[99])?;
-    }
+        stdin.flush()?;
+    };
+    let mut tkey = Tkey::new()?;
+    load_app(&mut tkey, bin)?;
+    let mut nonce = [0u8; 32];
+    tkey.read_exact(&mut nonce)?;
+    let (mut cipher, challange) = host::get_chacha20_cipher(&mut tkey, nonce)?;
     stdin.write_all(&challange)?;
     stdin.flush()?;
     let mut b = [0u8];
@@ -92,7 +87,7 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
             tkey.write_all(&sig_bytes)?;
         }
         Err(HostErr::TpmRefusedToSign) => {
-            if kill_slot {
+            if will_kill_slot {
                 Err(
                     "refusing to continue, current binary isn't enrolled with TPM. run qubes_enrollpt2",
                 )?;
@@ -124,7 +119,6 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     let mut keyfile: Zeroizing<[u8; 32]> = [0u8; 32].into();
     cipher.apply_keystream_b2b(&*encrypted_keyfile, &mut *keyfile);
     if currently_enrolled {
-        stdin.write_all(&current_keyfile.unwrap())?;
         stdin.write_all(&*keyfile)?;
         stdin.flush()?;
     } else {
@@ -142,7 +136,7 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
         Err(e) => Err(e)?,
         _ => Err(HostErr::UnknownError)?,
     }
-    if !kill_slot {
+    if !will_kill_slot {
         //0x91 is pretty arbritrary but means do nothing
         stdin.write_all(&[0x91u8])?;
         stdin.flush()?;
@@ -154,7 +148,7 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
     if code.success() {
         println!("success!!");
         tkey.write_all(&[HostMessage::DecryptionSuccess as u8])?;
-        Ok(ExitCode::SUCCESS)
+        Ok(())
     } else {
         Err("failed to  enroll, dom0 indicated an error. was password correct?".into())
     }
@@ -200,7 +194,10 @@ fn pass_enroll(
         _ => Err(ClientError::OutOfsync)?,
     }
 }
-fn get_current_keyfile() -> Result<[u8; 32], Box<dyn Error>> {
+fn get_current_keyfile(
+    stdin: &mut ChildStdin,
+    stdout: &mut ChildStdout,
+) -> Result<(), Box<dyn Error>> {
     let mut client_file = fs::File::open("/home/user/QubesIncoming/dom0/client")?;
     let mut tkey = Tkey::new()?;
     let mut client_bytes = vec![];
@@ -224,6 +221,9 @@ fn get_current_keyfile() -> Result<[u8; 32], Box<dyn Error>> {
     }
     let password: Zeroizing<String> =
         rpassword::prompt_password("enter currently enrolled password >")?.into();
+    if password.len() < 8 {
+        Err(ClientError::PassLen)?
+    }
     let argon2 = host::get_argon2();
     let mut hashed_pass = [0u8; 32];
     if let Err(e) = argon2.hash_password_into(password.as_bytes(), host::SALT, &mut hashed_pass) {
@@ -235,15 +235,33 @@ fn get_current_keyfile() -> Result<[u8; 32], Box<dyn Error>> {
     let mut encrypted_buf = [0u8; 32];
     cipher.apply_keystream_b2b(&hashed_pass, &mut encrypted_buf);
     tkey.write_all(&encrypted_buf)?;
+    let mut b = [0u8; 1];
+    tkey.read_exact(&mut b)?;
+    match ClientMessage::try_from(b[0]) {
+        Ok(ClientMessage::GoodPass) => {}
+        Err(e) => Err(e)?,
+        _ => Err(ClientError::OutOfsync)?,
+    }
     let mut keyfile = [0u8; 32];
     tkey.read_exact(&mut keyfile)?;
+    cipher.apply_keystream(&mut keyfile);
+    stdin.write_all(&keyfile)?;
+    stdin.flush()?;
+    keyfile.zeroize();
+    let mut b = [0u8; 1];
+    stdout.read_exact(&mut b)?;
+    match HostMessage::try_from(b[0]) {
+        Ok(HostMessage::DecryptionSuccess) => {}
+        Err(e) => Err(e)?,
+        _ => Err(ClientError::OutOfsync)?,
+    }
     loop {
         println!("\nplease UNPLUG Tkey and replug it back in to continue.");
         println!("press enter once you've done so.");
         let mut string = String::new();
         std::io::stdin().read_line(&mut string)?;
-        if Path::new("/dev/ttyACM0").exists() {
-            return Ok(keyfile);
+        if Path::new("/dev/ttyACM0").exists() || Path::new("/dev/ttyACM1").exists() {
+            return Ok(());
         }
     }
 }

@@ -7,3 +7,8 @@
 #### 2
 
 \[\]try make sure relevant keyboard hardware matches the expected identifiers to make it harder for a hardware keylogger to steal luks passphrase
+
+
+#### 3
+
+[] duress passcode support for initramfs

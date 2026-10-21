@@ -23,9 +23,7 @@ if ! qvm-run "$builder" 'test -d /home/user/tkey-tpm-luks '; then
   exit 4
 fi
 if ! qvm-run "$builder" 'test -f /home/user/tkey-tpm-luks/SALT'; then
-  if ! [[ -f "/boot/SALT" ]]; then
-    head -c 32 /dev/urandom >/boot/SALT
-  fi
+  test -f /boot/SALT || head -c 32 /dev/urandom >/boot/SALT
   qvm-copy-to-vm "$builder" /boot/SALT
   qvm-run "$builder" 'mv /home/user/QubesIncoming/dom0/SALT /home/user/tkey-tpm-luks/SALT'
 fi
@@ -112,7 +110,7 @@ grub2-mkconfig -o /boot/grub2/grub.cfg
 cat >/etc/qubes-rpc/qubes.TPMProxy <<EOF
 #!/usr/bin/sudo bash
 
-exec -c "$PWD/verify"
+exec -c "$PWD/verify" 2>> /root/tkey-files/verify.stderr
 EOF
 
 chmod +x /etc/qubes-rpc/qubes.TPMProxy

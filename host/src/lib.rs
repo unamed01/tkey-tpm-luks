@@ -93,7 +93,9 @@ impl From<std::io::Error> for HostErr {
 impl Display for HostErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HostErr::CryptsetupErr => write!(f, "cryptsetup sent an error"),
+            HostErr::CryptsetupErr => {
+                write!(f, "cryptsetup sent an error, in file line  ")
+            }
             HostErr::PipeError => write!(f, "failed to write or create pipe"),
             HostErr::IOError => write!(f, "failed to fetch keyfile from tkey"),
             HostErr::CryptsetupKilled => write!(f, "cryptsetup was killed.."),

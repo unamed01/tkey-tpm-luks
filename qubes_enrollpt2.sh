@@ -82,7 +82,7 @@ if ! [[ -f /boot/client ]] && [[ "${3:-}" == "--enrolled" ]]; then
   echo couldn\'t find current client binary, are you sure were enrolled?
   exit 3
 elif [[ -f /boot/client ]]; then
-  qvm-copy-to-vm "$disp_name" /boot/clie
+  qvm-copy-to-vm "$disp_name" /boot/client
 fi
 qvm-run -u root "$disp_name" "$enroll_term" -x /home/user/QubesIncoming/"$builder"/qubes_enroll "${1:-}" "${2:-}" "${3:-}"
 mv /boot/client /boot/client.old || true

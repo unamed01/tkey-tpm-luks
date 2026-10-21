@@ -1,6 +1,5 @@
 //verify.rs
 use host::{HostErr, HostMessage, verify};
-use std::fs;
 use std::process::ExitCode;
 use std::process::{Command, Stdio};
 use std::{
@@ -15,32 +14,29 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut enrolled_byte = [0u8; 1];
     std::io::stdin().read_exact(&mut enrolled_byte)?;
     let ennrolled = enrolled_byte[0] == 0;
+    let keyfile = if ennrolled {
+        Some(get_current_keyfile()?)
+    } else {
+        None
+    };
     let mut challange = [0u8; 108];
     std::io::stdin().read_exact(&mut challange)?;
-    let mut f = fs::File::create("/root/tkey-files/verify.log")?;
     match verify(challange) {
-        Ok(s) => {
+        Ok(sig) => {
             stdout().write_all(&[HostMessage::TpmSigned as u8])?;
-            stdout().write_all(&s)?;
+            stdout().write_all(&sig)?;
             stdout().flush()?;
         }
         Err(e) => {
-            writeln!(f, "tpm refused to unseal")?;
-            writeln!(f, "{}", e)?;
-            writeln!(
-                f,
-                "moving on this is only meant to happen if you're updating."
-            )?;
+            eprintln!("tpm refused to unseal");
+            eprintln!("{}", e);
+            eprintln!("moving on this is only meant to happen if you're updating.");
             stdout().write_all(&[HostErr::TpmRefusedToSign as u8])?;
             stdout().flush()?;
         }
     };
-    if ennrolled {
-        enroll(Some(get_current_keyfile()?))?;
-    } else {
-        enroll(None)?;
-    };
-    writeln!(f, "success!")?;
+    enroll(keyfile)?;
+    eprintln!("success!");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -76,10 +72,9 @@ fn enroll(get_current_keyfile: Option<[u8; 32]>) -> Result<(), HostErr> {
         if got_current_keyfile {
             "32"
         } else {
-            //got password
+            //checked above so unwrap is fine.
             &current_pass_len.unwrap()
         },
-        //checked above so unwrap is fine.
         "--new-keyfile=-",
         "--new-keyfile-size=32",
         "--iter-time=1", // keyfile is random no point in a lots of iterations
@@ -119,7 +114,11 @@ fn enroll(get_current_keyfile: Option<[u8; 32]>) -> Result<(), HostErr> {
         io::stdin().read_exact(&mut num)?;
         //0x91 means do nothing (pretty arbritrary but works )
         if num[0] != 0x91u8 {
-            kill_slot(*keyfile, num[0])
+            if num[0] > 32 {
+                eprintln!("{} isn't a valid luks2 slot.", num[0]);
+                return Err(HostErr::CryptsetupErr);
+            }
+            kill_slot(keyfile, num[0])
         } else {
             Ok(())
         }
@@ -128,7 +127,7 @@ fn enroll(get_current_keyfile: Option<[u8; 32]>) -> Result<(), HostErr> {
     }
 }
 
-fn kill_slot(keyfile: [u8; 32], slot: u8) -> Result<(), HostErr> {
+fn kill_slot(keyfile: Zeroizing<[u8; 32]>, slot: u8) -> Result<(), HostErr> {
     let args = &[
         "luksKillSlot",
         "--batch-mode",
@@ -148,10 +147,9 @@ fn kill_slot(keyfile: [u8; 32], slot: u8) -> Result<(), HostErr> {
             return Err(HostErr::PipeError);
         }
     };
-    stdin.write_all(&keyfile)?;
+    stdin.write_all(&*keyfile)?;
     if cryptsetup.wait()?.success() {
-        let mut f = fs::File::create("/root/tkey-files/verify.log")?;
-        writeln!(f, "successfully killed slot {slot}!!")?;
+        eprintln!("successfully killed slot {slot}!!");
         Ok(())
     } else {
         Err(HostErr::CryptsetupKilled)?
@@ -180,8 +178,12 @@ fn get_current_keyfile() -> Result<[u8; 32], HostErr> {
     };
     crypt_stdin.write_all(&keyfile)?;
     if cryptsetup.wait()?.success() {
+        stdout().write_all(&[HostMessage::DecryptionSuccess as u8])?;
+        stdout().flush()?;
         Ok(keyfile)
     } else {
+        stdout().write_all(&[HostErr::DecryptionError as u8])?;
+        stdout().flush()?;
         Err(HostErr::DecryptionError)
     }
 }
