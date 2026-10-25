@@ -20,3 +20,6 @@ getrandom = "0.4.3"
 argon2 = "0.6.0"
 nix = { version = "0.31.3", features = ["fs"] }
 libc = "0.2.191"
+
+[build-dependencies]
+argon2 = "0.6.0"

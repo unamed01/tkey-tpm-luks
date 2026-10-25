@@ -4,3 +4,4 @@ host/target/
 client/clientApp
 host_pubkey
 SALT
+duress.argon2
