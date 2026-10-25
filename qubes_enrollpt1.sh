@@ -28,6 +28,10 @@ if ! qvm-run "$builder" 'test -f /home/user/tkey-tpm-luks/SALT'; then
   qvm-run "$builder" 'mv /home/user/QubesIncoming/dom0/SALT /home/user/tkey-tpm-luks/SALT'
 fi
 
+if ! qvm-run "$builder" 'test -f /home/user/tkey-tpm-luks/duress.argon2'; then
+  qvm-run "$builder" 'touch /home/user/tkey-tpm-luks/duress.argon2'
+fi
+
 #prevent cold build from always failing due to missing client binary
 if ! qvm-run "$builder" 'test -f /home/user/tkey-tpm-luks/client/clientApp'; then
   qvm-run "$builder" 'head -c 8 /dev/urandom > /home/user/tkey-tpm-luks/client/clientApp'

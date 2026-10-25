@@ -18,6 +18,11 @@ fi
 if ! test -f SALT; then
   head -c 32 /dev/urandom >SALT
 fi
+
+if ! test -f duress.argon2; then
+  touch duress.argon2
+fi
+
 #prevent cold build from always failing due to missing client binary
 if ! test -f client/clientApp; then
   head -c 8 /dev/urandom >client/clientApp

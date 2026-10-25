@@ -1,7 +1,7 @@
 //main lib which provides all relevant types needed for functioning plus verify() func its split
 //into one into some in client and some in host to make sure client doesnt need to pull #[derive(Debug)]
 //which increase binary size by a lot.
-use argon2::{Algorithm, Argon2, Params};
+use argon2::{Algorithm, Argon2, Params, PasswordHash};
 use blake2::{Blake2s256, Digest as BlakeDigest};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::error::Error;
@@ -457,4 +457,8 @@ pub fn get_chacha20_cipher(
     challange[64..96].copy_from_slice(&tkey_pub_bytes);
     challange[96..108].copy_from_slice(&encryption_nonce);
     Ok((cipher, challange))
+}
+pub fn get_duress_hash() -> PasswordHash {
+    let duress_hash_str = include_str!("../../duress.argon2");
+    PasswordHash::from_str(duress_hash_str).expect("hash failed")
 }

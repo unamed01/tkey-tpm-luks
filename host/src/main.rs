@@ -1,3 +1,4 @@
+use argon2::{PasswordHash, PasswordVerifier};
 // this file is main initramfs entrypoint it mounts /boot from it reads in client bin then
 // takes nonce gives to tpm and if tpm ever refuses to sign host sends
 // failure onto client then client requires user interaction before we can move onto passphrase
@@ -7,11 +8,12 @@
 use chacha20::cipher::stream::StreamCipher;
 use host::{
     ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status,
-    get_argon2,
+    get_argon2, get_duress_hash,
 };
 use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
+use std::str::FromStr;
 use std::{
     error::Error,
     io::Read,
@@ -73,8 +75,21 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             }
         };
     }
-    println!("couldn't decrypted system, 3/3 tries exhausted.");
+    println!("couldn't decrypt system, 3/3 tries exhausted.");
     Ok(ExitCode::FAILURE)
+}
+
+fn duress() -> Result<(), Box<dyn Error>> {
+    let args = ["luksErase", "--batch-mode", host::ENCRYPTEDDISK];
+    let cryptsetup = Command::new("/usr/bin/cryptsetup")
+        .args(args)
+        .spawn()?
+        .wait();
+    if cryptsetup?.success() {
+        Ok(())
+    } else {
+        Err("failed to wipe disk..".into())
+    }
 }
 fn ask_for_password(
     tkey: &mut Tkey,
@@ -113,6 +128,10 @@ fn ask_for_password(
         eprintln!("this shouldn't happen, please report this issue.");
         eprintln!("{e}");
         return Err(ClientError::UnknownError);
+    }
+    let duress_hash = host::get_duress_hash();
+    if let Ok(()) = argon2.verify_password(&hashed_pass, &duress_hash) {
+        duress().unwrap();
     }
     passphrase_bytes.zeroize();
     let mut encrypted_hashed_pass = [0u8; 32];
