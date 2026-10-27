@@ -13,8 +13,8 @@ const CRYPTSETUP: &str = "/usr/sbin/cryptsetup";
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut enrolled_byte = [0u8; 1];
     std::io::stdin().read_exact(&mut enrolled_byte)?;
-    let ennrolled = enrolled_byte[0] == 0;
-    let keyfile = if ennrolled {
+    let enrolled = enrolled_byte[0] == 0;
+    let keyfile = if enrolled {
         Some(get_current_keyfile()?)
     } else {
         None
@@ -40,7 +40,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn enroll(get_current_keyfile: Option<[u8; 32]>) -> Result<(), HostErr> {
+fn enroll(get_current_keyfile: Option<Zeroizing<[u8; 32]>>) -> Result<(), HostErr> {
     let got_current_keyfile = get_current_keyfile.is_some();
     let (current_pass_len, current_pass) = if !got_current_keyfile {
         //this below makes sure that we can realiably write the correct passphrase onto cryptsetup for
@@ -92,7 +92,7 @@ fn enroll(get_current_keyfile: Option<[u8; 32]>) -> Result<(), HostErr> {
     //writes current passphrase
     match get_current_keyfile {
         Some(get_current_keyfile) => {
-            stdin.write_all(&get_current_keyfile)?;
+            stdin.write_all(&*get_current_keyfile)?;
         }
         None => {
             stdin.write_all(current_pass.unwrap().as_bytes())?;
@@ -114,7 +114,7 @@ fn enroll(get_current_keyfile: Option<[u8; 32]>) -> Result<(), HostErr> {
         io::stdin().read_exact(&mut num)?;
         //0x91 means do nothing (pretty arbritrary but works )
         if num[0] != 0x91u8 {
-            if num[0] > 32 {
+            if num[0] >= 32 {
                 eprintln!("{} isn't a valid luks2 slot.", num[0]);
                 return Err(HostErr::CryptsetupErr);
             }
@@ -155,7 +155,7 @@ fn kill_slot(keyfile: Zeroizing<[u8; 32]>, slot: u8) -> Result<(), HostErr> {
         Err(HostErr::CryptsetupKilled)?
     }
 }
-fn get_current_keyfile() -> Result<[u8; 32], HostErr> {
+fn get_current_keyfile() -> Result<Zeroizing<[u8; 32]>, HostErr> {
     let args = &[
         "luksOpen",
         "--batch-mode",
@@ -180,7 +180,7 @@ fn get_current_keyfile() -> Result<[u8; 32], HostErr> {
     if cryptsetup.wait()?.success() {
         stdout().write_all(&[HostMessage::DecryptionSuccess as u8])?;
         stdout().flush()?;
-        Ok(keyfile)
+        Ok(keyfile.into())
     } else {
         stdout().write_all(&[HostErr::DecryptionError as u8])?;
         stdout().flush()?;
