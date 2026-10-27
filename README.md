@@ -66,6 +66,12 @@ CDI: (compound device Identifier) Tkey's, way to ensure currently loaded app has
 4. Tkey will decrypt hash and do blake2(*CDI + decrypted_passphrase_hash) and that becomes the keyfile, which Tkey will encrypt and send to host
 5. host will decrypt keyfile, then use cryptsetup to unlock disk if passphrase and CDI were correct disk unlocks!
 
+**duress passcode**
+also adds option for duress password in the initramfs enviroment which securely wipes the luks2 header when a specified password is inputted (ensure you're aware of possible legal consequences of using this feature before doing so.)
+Enroll duress password by running: 
+```bash
+bash enroll_duress.sh
+```
 
 > [!WARNING]
 > this software is made to be the least intrusive as it can be, but do make a backup before proceeding since its still in beta.
@@ -137,7 +143,19 @@ sudo bash qubes_enrollpt2.sh
 ```
 #### updates 
 
-Just run qubes_enrollpt2.sh again for re enrollment will walk trough the same process as the first time enrolling new PCR values.
+**updating grub/xen..etc**
+Just run qubes_enrollpt2.sh again for re enrollment will walk trough the same process as the first time enrolling new PCR values. With correct usage.
 ```bash
 sudo bash qubes_enrollpt2.sh
+sudo bash qubes_enrollpt2.sh --enrolled # if tkey keyfile is already enrolled into luks
+# replace N with whatever keyslot is currently enrolled find N with cryptsetup luksDump DISK (replace DISK with path to your actual disk e.g /dev/nvmen0p3)
+sudo bash qubes_enrollpt2.sh --enrolled --kill-slot N 
 ```
+
+#### upgrading tkey-tpm-luks itself (Qubes and normal Linux)
+to upgrade tkey-tpm-luks itself you pull in the new patches then run setup scripts pt1/2 again **ensure patches are pgp signed by 5A1467E20F0F2D0F3A25584667A8915827CDA400** (double check gpg fingerprint at my website [unamed01.top](https://www.unamed01.top/)) ensure they match then:
+```bash
+git pull 
+git log --show-signature
+```
+then rerun setup scripts from start (taking --enrolled as needed) [Qubes](https://github.com/unamed01/tkey-tpm-luks#qubesos-usage-tested-for-qubes-431) or [Linux](https://github.com/unamed01/tkey-tpm-luks#usage-normal-linux-distros-must-use-dracut-and-use-systemd)
