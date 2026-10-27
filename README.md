@@ -72,6 +72,7 @@ Enroll duress password by running:
 ```bash
 bash enroll_duress.sh
 ```
+**NOTE: MUST run setup script part 1 to enable this.**
 
 > [!WARNING]
 > this software is made to be the least intrusive as it can be, but do make a backup before proceeding since its still in beta.
