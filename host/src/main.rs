@@ -1,19 +1,18 @@
-use argon2::{PasswordHash, PasswordVerifier};
 // this file is main initramfs entrypoint it mounts /boot from it reads in client bin then
 // takes nonce gives to tpm and if tpm ever refuses to sign host sends
 // failure onto client then client requires user interaction before we can move onto passphrase
 // another warning is shown at systemd-ask-password (even though we can guarantee it since we
 // couldnt verify software running on host) this is vital to allow user to update kernel,xen or grub
 // which is extremely important
+use argon2::PasswordVerifier;
 use chacha20::cipher::stream::StreamCipher;
 use host::{
     ClientError, ClientMessage, HostErr, HostMessage, Tkey, auth_with_tkey_and_tpm, check_status,
-    get_argon2, get_duress_hash,
+    get_argon2,
 };
 use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
-use std::str::FromStr;
 use std::{
     error::Error,
     io::Read,
@@ -129,8 +128,12 @@ fn ask_for_password(
         eprintln!("{e}");
         return Err(ClientError::UnknownError);
     }
-    let duress_hash = host::get_duress_hash();
-    if let Ok(()) = argon2.verify_password(&hashed_pass, &duress_hash) {
+
+    if let Ok(duress_hash) = host::get_duress_hash()
+        && argon2
+            .verify_password(&passphrase_bytes[..actual_pass_len], &duress_hash)
+            .is_ok()
+    {
         duress().unwrap();
     }
     passphrase_bytes.zeroize();

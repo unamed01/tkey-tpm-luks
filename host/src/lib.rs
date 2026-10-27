@@ -94,7 +94,7 @@ impl Display for HostErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HostErr::CryptsetupErr => {
-                write!(f, "cryptsetup sent an error, in file line  ")
+                write!(f, "cryptsetup sent an error")
             }
             HostErr::PipeError => write!(f, "failed to write or create pipe"),
             HostErr::IOError => write!(f, "failed to fetch keyfile from tkey"),
@@ -458,7 +458,15 @@ pub fn get_chacha20_cipher(
     challange[96..108].copy_from_slice(&encryption_nonce);
     Ok((cipher, challange))
 }
-pub fn get_duress_hash() -> PasswordHash {
+/// gets  duress hash
+/// # Errors
+/// should only error if theres no duress hash.(shouldn't compile if isn't empty with invalid hash)
+/// # Panics
+/// shouldn't panic as it was checked in build.rs
+pub fn get_duress_hash() -> Result<PasswordHash, Box<dyn Error>> {
     let duress_hash_str = include_str!("../../duress.argon2");
-    PasswordHash::from_str(duress_hash_str).expect("hash failed")
+    if duress_hash_str.is_empty() {
+        Err("no duress password..")?
+    }
+    Ok(PasswordHash::from_str(duress_hash_str).expect("hash failed"))
 }
