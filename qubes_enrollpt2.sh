@@ -67,7 +67,7 @@ qvm-run -p "$builder" 'cd /home/user/tkey-tpm-luks/client/ && cargo build --rele
 echo "type to to copy to $disp_name (copying qubes_enroll)"
 qvm-run -p "$builder" "cd /home/user/tkey-tpm-luks/host && bootdev=\"${bootD}\" luksdev=\"${luksD}\" luksUUID=\"${luksUUID}\" cargo build --release"
 notify-send "qubes_enrollpt2" "type to to copy to $disp_name (copying qubes_enroll)"
-qvm-run -p "$builder" "qvm-copy target/release/qubes_enroll"
+qvm-run -p "$builder" "qvm-copy /home/user/tkey-tpm-luks/host/target/release/qubes_enroll"
 #allow disp to run verify bin with qrexec svc we setup in part1
 cat >/etc/qubes/policy.d/20-tkey-tpm-luks.policy <<EOF
 qubes.TPMProxy * $disp_name dom0 allow
