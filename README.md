@@ -66,7 +66,7 @@ CDI: (compound device Identifier) Tkey's, way to ensure currently loaded app has
 4. Tkey will decrypt hash and do blake2(*CDI + decrypted_passphrase_hash) and that becomes the keyfile, which Tkey will encrypt and send to host
 5. host will decrypt keyfile, then use cryptsetup to unlock disk if passphrase and CDI were correct disk unlocks!
 
-**duress passcode**
+## duress passcode
 also adds option for duress password in the initramfs enviroment which securely wipes the luks2 header when a specified password is inputted (ensure you're aware of possible legal consequences of using this feature before doing so.)
 Enroll duress password by running: 
 ```bash
