@@ -11,4 +11,4 @@
 
 #### 3
 
-[] duress passcode support for initramfs
+\[x\] duress passcode support for initramfs
