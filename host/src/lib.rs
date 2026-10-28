@@ -468,5 +468,5 @@ pub fn get_duress_hash() -> Result<PasswordHash, Box<dyn Error>> {
     if duress_hash_str.is_empty() {
         Err("no duress password..")?
     }
-    Ok(PasswordHash::from_str(duress_hash_str).expect("hash failed"))
+    Ok(PasswordHash::from_str(duress_hash_str.trim()).expect("hash failed"))
 }
