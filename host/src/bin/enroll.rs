@@ -79,7 +79,7 @@ fn pass_enroll(
 }
 fn enroll(tkey: &mut Tkey, cipher: &mut host::ChaCha20Cipher) -> Result<(), HostErr> {
     println!("to enroll you must type in your currently enrolled passphrase (won't be echoed)");
-    let mut current_pass = rpassword::prompt_password(">")?;
+    let mut current_pass: Zeroizing<String> = rpassword::prompt_password(">")?.into();
     let current_pass_len = current_pass.len().to_string();
     let args = &[
         "luksAddKey",
