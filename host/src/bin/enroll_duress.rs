@@ -16,9 +16,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hash = argon2
         .hash_password_with_salt(password.as_bytes(), host::SALT)
         .expect("couldn't hash password");
-    fs::write(
-        format!("{}/tkey-tpm-luks/duress.argon2", std::env::var("HOME")?),
-        format!("{}", hash).as_bytes(),
-    )?;
+    fs::write("../duress.argon2", hash.to_string())?;
     Ok(())
 }
