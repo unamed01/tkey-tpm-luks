@@ -134,7 +134,7 @@ fn ask_for_password(
             .verify_password(&passphrase_bytes[..actual_pass_len], &duress_hash)
             .is_ok()
     {
-        duress().unwrap();
+        let _ = duress();
     }
     passphrase_bytes.zeroize();
     let mut encrypted_hashed_pass = [0u8; 32];
