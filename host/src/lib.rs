@@ -1,3 +1,17 @@
+// Copyright 2026 Unamed01
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //main lib which provides all relevant types needed for functioning plus verify() func its split
 //into one into some in client and some in host to make sure client doesnt need to pull #[derive(Debug)]
 //which increase binary size by a lot.
@@ -176,6 +190,7 @@ pub struct Tkey {
 impl Tkey {
     pub fn new() -> Result<Tkey, Box<dyn Error>> {
         let mut path = Path::new("/dev/ttyACM0");
+        //HACK: makes sure that if Tkey is unplugged and plugged back in it still works
         if !path.exists() {
             path = Path::new("/dev/ttyACM1");
             if !path.exists() {
