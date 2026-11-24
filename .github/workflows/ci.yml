@@ -1,0 +1,14 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: head -c 91 /dev/urandom > tpm_pubkey_raw.bin
+      - run: cd client && cargo test
+      - run: cd client && cargo clippy --release -Z build-std=core --target riscv32i-unknown-none-elf -- -D warnings
+

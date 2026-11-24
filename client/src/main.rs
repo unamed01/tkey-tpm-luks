@@ -12,10 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
+//doesn't turn it off on tests or raw clippy
+#![cfg_attr(test, allow(unused_imports))]
+#![cfg_attr(test, allow(unused_variables))]
+#![cfg_attr(test, allow(unused_mut))]
+#![cfg_attr(test, allow(dead_code))]
 
-// this takes generates nonce sends nonce over the wire then takes in signature note this should is
+// this takes generates nonce sends nonce over the wire then takes in signature note this should and  is
 // intentionally outside of measured PCR values this is fine since cdi =
 // blake2s(uds + blake2s(app_bytes)) so if this app ever changes even correct passphrase cant unlock
 // disk.
@@ -32,8 +37,12 @@ use rustkey::{blake2s, done, random, read_cdi};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 use zeroize::Zeroize;
 
+#[cfg(test)]
+use crate::test::{PUB_KEY_BYTES, SIG};
+
 // Entry point: zero all registers, init stack, zero BSS, call main.
 // Taken directly from the rusTkey README.
+#[cfg(not(test))]
 global_asm!(
     ".section \".text.init\"",
     ".global _start",
@@ -98,6 +107,7 @@ enum ClientMessage {
 }
 
 #[repr(u8)]
+#[cfg_attr(test, derive(Debug))]
 enum ClientError {
     Blake2 = 0x10,
     _PassLen = 0x11,
@@ -114,11 +124,13 @@ enum ClientError {
 }
 
 #[panic_handler]
+#[cfg(not(test))]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     rustkey::abort()
 }
 
 #[unsafe(no_mangle)]
+#[cfg(not(test))]
 extern "C" fn main() -> ! {
     let mut nonce = [0u8; 32];
     random(&mut nonce, b"");
@@ -218,18 +230,37 @@ extern "C" fn main() -> ! {
 fn verify_sig(challange: [u8; 108]) -> Result<(), ClientError> {
     //shouldnt fail since we've checked pubkey at compile time
     let key_bytes: &[u8; 91] = include_bytes!("../../tpm_pubkey_raw.bin");
+
+    #[cfg(test)]
+    let key_bytes: &[u8] = PUB_KEY_BYTES.get();
+
     let tpm_pubkey =
         VerifyingKey::from_sec1_bytes(&key_bytes[26..91]).map_err(|_| ClientError::BadPubkey)?;
     let mut status = [0u8; 1];
+
+    #[cfg(not(test))]
     read_into(&mut status);
+
+    #[cfg(test)]
+    let status = [HostMessage::TpmSigned as u8];
+
     if status[0] == HostMessage::TpmSigned as u8 {
         let mut sig = [0u8; 64];
+
+        #[cfg(not(test))]
         read_into(&mut sig);
+
+        #[cfg(test)]
+        let sig = SIG.get();
+
         let sig = Signature::try_from(&sig[..]).map_err(|_| ClientError::MalformedSig)?;
         tpm_pubkey
             .verify(&challange, &sig)
             .map_err(|_| ClientError::InvalidSig)?;
+
+        #[cfg(not(test))]
         write_u8(ClientMessage::GoodSig as u8);
+
         Ok(())
     } else {
         Err(ClientError::TpmRefusedToSign)
@@ -237,8 +268,73 @@ fn verify_sig(challange: [u8; 108]) -> Result<(), ClientError> {
 }
 
 //helper func to write any byte slice onto host
+#[cfg(not(test))]
 fn write_u8_slice(slice: &[u8]) {
     for b in slice.iter() {
         write_u8(*b);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use core::{cell::Cell, primitive};
+
+    use chacha20::cipher::common::TryKeyInit;
+    use p256::{
+        ecdsa::{Signature, SigningKey, signature::Signer},
+        elliptic_curve::sec1::ToSec1Point,
+    };
+
+    use crate::{ClientError, verify_sig};
+    use std::thread::LocalKey;
+
+    //challange content is irelevant here.
+    const CHALLANGE: [u8; 108] = [0u8; 108];
+
+    thread_local! {
+        pub static SIG: Cell<[u8;64]> = Cell::new([0u8;64]);
+        pub static PUB_KEY_BYTES: Cell<&[u8]> = Cell::new(&[0u8;91]);
+    }
+    #[test]
+    fn verify_with_bad_sig() {
+        let mut key_bytes = [0u8; 32];
+        getrandom::fill(&mut key_bytes).unwrap();
+        let privkey = p256::SecretKey::new_from_slice(&key_bytes).unwrap();
+        let mut signing_key = SigningKey::from(privkey.clone());
+        let publickey_bytes = privkey.public_key().to_sec1_point(false);
+        let mut full_publickey_bytes = vec![0u8; 26];
+        full_publickey_bytes.extend_from_slice(publickey_bytes.as_bytes());
+        PUB_KEY_BYTES.set(Box::leak(full_publickey_bytes.into_boxed_slice()));
+        let sig: Signature = signing_key.sign(&CHALLANGE);
+        let r = sig.r();
+        let s = sig.s();
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes[0..32].copy_from_slice(&r.to_bytes());
+        sig_bytes[32..64].copy_from_slice(&s.to_bytes());
+        sig_bytes[44] = !sig_bytes[44];
+        SIG.set(sig_bytes);
+        assert!(matches!(
+            verify_sig(CHALLANGE),
+            Err(ClientError::InvalidSig)
+        ))
+    }
+    #[test]
+    fn verify_with_good_sig() {
+        let mut key_bytes = [0u8; 32];
+        getrandom::fill(&mut key_bytes).unwrap();
+        let privkey = p256::SecretKey::new_from_slice(&key_bytes).unwrap();
+        let mut signing_key = SigningKey::from(privkey.clone());
+        let publickey_bytes = privkey.public_key().to_sec1_point(false);
+        let mut full_publickey_bytes = vec![0u8; 26];
+        full_publickey_bytes.extend_from_slice(publickey_bytes.as_bytes());
+        PUB_KEY_BYTES.set(Box::leak(full_publickey_bytes.into_boxed_slice()));
+        let sig: Signature = signing_key.sign(&CHALLANGE);
+        let r = sig.r();
+        let s = sig.s();
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes[0..32].copy_from_slice(&r.to_bytes());
+        sig_bytes[32..64].copy_from_slice(&s.to_bytes());
+        SIG.set(sig_bytes);
+        verify_sig(CHALLANGE).unwrap()
     }
 }

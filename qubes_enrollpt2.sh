@@ -63,7 +63,7 @@ bash enroll.sh
 qvm-run "$builder" "rm /home/user/QubesIncoming/dom0/tpm_pubkey_raw.bin" || true
 qvm-copy-to-vm "$builder" "tpm_pubkey_raw.bin"
 qvm-run "$builder" mv /home/user/QubesIncoming/dom0/tpm_pubkey_raw.bin /home/user/tkey-tpm-luks/tpm_pubkey_raw.bin
-qvm-run -p "$builder" 'cd /home/user/tkey-tpm-luks/client/ && cargo build --release && llvm-objcopy --input-target=elf32-littleriscv --output-target=binary target/riscv32i-unknown-none-elf/release/client clientApp '
+qvm-run -p "$builder" 'cd /home/user/tkey-tpm-luks/client/ && cargo build --release -Z build-std=core --target riscv32i-unknown-none-elf && llvm-objcopy --input-target=elf32-littleriscv --output-target=binary target/riscv32i-unknown-none-elf/release/client clientApp '
 echo "type to to copy to $disp_name (copying qubes_enroll)"
 qvm-run -p "$builder" "cd /home/user/tkey-tpm-luks/host && bootdev=\"${bootD}\" luksdev=\"${luksD}\" luksUUID=\"${luksUUID}\" cargo build --release"
 notify-send "qubes_enrollpt2" "type to to copy to $disp_name (copying qubes_enroll)"
