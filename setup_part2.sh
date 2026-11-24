@@ -19,7 +19,7 @@ if ! cryptsetup isLuks "$luksdev"; then
 fi
 bash enroll.sh
 cd client/
-sudo -u "$SUDO_USER" cargo build --release
+sudo -u "$SUDO_USER" cargo build --release -Z build-std=core --target riscv32i-unknown-none-elf
 sudo -u "$SUDO_USER" llvm-objcopy --input-target=elf32-littleriscv --output-target=binary target/riscv32i-unknown-none-elf/release/client clientApp
 cp -r clientApp /boot/client
 cd ../host
