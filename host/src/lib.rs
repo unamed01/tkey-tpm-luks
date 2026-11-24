@@ -22,6 +22,7 @@ use std::error::Error;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::Path;
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 use chacha20::cipher::stream::StreamCipherCoreWrapper;
 use chacha20::{ChaCha20, ChaCha20Rng, KeyIvInit, rand_core::SeedableRng};
@@ -334,6 +335,20 @@ pub fn verify(ticket: [u8; 108]) -> Result<[u8; 64], Box<dyn Error>> {
     Ok(sig_bytes)
 }
 
+///asks user for password twice and checks them to make sure they're equal (for password enrolling)
+pub fn get_password_twice_and_check(prompt: &str) -> Result<Zeroizing<String>, Box<dyn Error>> {
+    println!("{}", prompt);
+    loop {
+        let pass1: Zeroizing<String> = rpassword::prompt_password(">")?.into();
+        println!("type in again for confirmation.");
+        let pass2: Zeroizing<String> = rpassword::prompt_password(">")?.into();
+        if pass1 == pass2 {
+            return Ok(pass1);
+        };
+        println!("passwords DID NOT match, please try again.");
+    }
+}
+
 ///make sure argon2 is consistent accross files provides sane defaults.
 ///this would only slowdown bruteforcing in a scenario where an attacker successfully extracted CDI
 ///from Tkey trough a vulnerability which is extremely unlikely so parameters are kept fast for
@@ -343,7 +358,7 @@ pub fn get_argon2() -> Argon2<'static> {
     Argon2::new(Algorithm::Argon2id, argon2::Version::V0x13, params)
 }
 
-// authenticates with TPM and Tkey in paralel
+/// authenticates with TPM and Tkey
 pub fn auth_with_tkey_and_tpm(
     bin: Vec<u8>,
 ) -> Result<(Tkey, bool, ChaCha20Cipher), Box<dyn Error>> {

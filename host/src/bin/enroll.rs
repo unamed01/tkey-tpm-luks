@@ -53,18 +53,10 @@ fn pass_enroll(
     tkey: &mut Tkey,
     cipher: &mut host::ChaCha20Cipher,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!(
-        "enrolling passphrase now,you'll need to type this in exactly everytime to unlock your disk. (wont be echoed)"
-    );
-    let pass1: Zeroizing<String> = rpassword::prompt_password(">")?.into();
-    println!("type password in again for confirmation.");
-    let pass2: Zeroizing<String> = rpassword::prompt_password(">")?.into();
-    if pass1 != pass2 {
-        println!("passwords DID NOT match, try again.");
-        pass_enroll(tkey, cipher)?;
-        return Ok(());
-    };
-    let mut pass_len = pass1.len();
+    let password = host::get_password_twice_and_check(
+        "enrolling passphrase now,you'll need to type this in exactly everytime to unlock your disk. (wont be echoed)",
+    )?;
+    let mut pass_len = password.len();
     if pass_len < 8 {
         pass_len.zeroize();
         pass_enroll(tkey, cipher)?;
@@ -72,7 +64,7 @@ fn pass_enroll(
     }
     let argon2 = host::get_argon2();
     let mut password_hash = [0u8; 32];
-    if let Err(e) = argon2.hash_password_into(pass1.as_bytes(), host::SALT, &mut password_hash) {
+    if let Err(e) = argon2.hash_password_into(password.as_bytes(), host::SALT, &mut password_hash) {
         eprintln!("ERR: failed to hash passphrase");
         eprintln!("this shouldn't happen, please report this issue.");
         eprintln!("{e}");
