@@ -11,4 +11,6 @@ jobs:
       - run: head -c 91 /dev/urandom > tpm_pubkey_raw.bin
       - run: cd client && cargo test
       - run: cd client && cargo clippy --release -Z build-std=core --target riscv32i-unknown-none-elf -- -D warnings
+      - run: cd client && cargo audit
+      - run: cd host   && cargo audit
 
